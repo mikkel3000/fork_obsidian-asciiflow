@@ -46,13 +46,15 @@ export class Grid {
   }
 
   setCell(row: number, col: number, value: string) {
-    if (row < 0 || col < 0) return;
-    if (row >= this.size.rows || col >= this.size.cols) return;
+    if (!Number.isInteger(row) || !Number.isInteger(col) || row < 0 || col < 0)
+      return;
     const key = Grid.key(row, col);
     if (!value || value === " ") {
       this.cells.delete(key);
       return;
     }
+    this.size.rows = Math.max(this.size.rows, row + 1);
+    this.size.cols = Math.max(this.size.cols, col + 1);
     this.cells.set(key, value);
   }
 
@@ -63,20 +65,38 @@ export class Grid {
     }
   }
 
+  getBounds() {
+    let endRow = 0,
+      endCol = 0;
+    this.forEachCell(({ row, col }) => {
+      endRow = Math.max(endRow, row);
+      endCol = Math.max(endCol, col + 1);
+    });
+    return { endRow, endCol };
+  }
+
+  equals(other: Grid): boolean {
+    if (
+      this.size.rows !== other.size.rows ||
+      this.size.cols !== other.size.cols ||
+      this.cells.size !== other.cells.size
+    )
+      return false;
+    for (const [key, value] of this.cells) {
+      if (other.cells.get(key) !== value) return false;
+    }
+    return true;
+  }
+
   clone(): Grid {
     const cloned = new Grid(this.size.rows, this.size.cols);
-    for (const [key, value] of this.cells.entries()) {
-      cloned.cells.set(key, value);
-    }
+    cloned.cells = new Map(this.cells);
     return cloned;
   }
 
   loadFromGrid(other: Grid) {
     const { rows, cols } = other.getSize();
     this.size = { rows, cols };
-    this.cells.clear();
-    other.forEachCell(({ row, col, value }) => {
-      this.setCell(row, col, value);
-    });
+    this.cells = new Map(other.cells);
   }
 }

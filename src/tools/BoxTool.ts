@@ -1,51 +1,28 @@
 import { Grid } from "../model/Grid";
+import { bounds, drawBox } from "../model/Drawing";
 import { ITool } from "./ITool";
 import { ToolContext } from "./ToolContext";
 import { ToolPointerState } from "./ToolTypes";
-
 export class BoxTool implements ITool {
   id = "box";
-  private baseGrid: Grid | null = null;
-
-  onPointerDown(state: ToolPointerState, ctx: ToolContext) {
-    this.baseGrid = ctx.grid.clone();
-    this.drawBox(state, ctx);
+  private base: Grid | null = null;
+  onPointerDown(s: ToolPointerState, ctx: ToolContext) {
+    this.base = ctx.grid.clone();
+    this.draw(s, ctx);
   }
-
-  onPointerMove(state: ToolPointerState, ctx: ToolContext) {
-    if (!state.isDragging) return;
-    this.drawBox(state, ctx);
+  onPointerMove(s: ToolPointerState, ctx: ToolContext) {
+    if (s.isDragging) this.draw(s, ctx);
   }
-
-  onPointerUp(state: ToolPointerState, ctx: ToolContext) {
-    this.drawBox(state, ctx);
-    this.baseGrid = null;
+  onPointerUp(s: ToolPointerState, ctx: ToolContext) {
+    if (s.row === s.startRow && s.col === s.startCol && this.base) {
+      ctx.grid.loadFromGrid(this.base);
+      ctx.render();
+    } else this.draw(s, ctx);
+    this.base = null;
   }
-
-  private drawBox(state: ToolPointerState, ctx: ToolContext) {
-    if (this.baseGrid) {
-      ctx.grid.loadFromGrid(this.baseGrid);
-    }
-    const startRow = Math.min(state.startRow, state.row);
-    const endRow = Math.max(state.startRow, state.row);
-    const startCol = Math.min(state.startCol, state.col);
-    const endCol = Math.max(state.startCol, state.col);
-
-    for (let c = startCol + 1; c < endCol; c += 1) {
-      ctx.setCell(startRow, c, "─");
-      ctx.setCell(endRow, c, "─");
-    }
-
-    for (let r = startRow + 1; r < endRow; r += 1) {
-      ctx.setCell(r, startCol, "│");
-      ctx.setCell(r, endCol, "│");
-    }
-
-    ctx.setCell(startRow, startCol, "┌");
-    ctx.setCell(startRow, endCol, "┐");
-    ctx.setCell(endRow, startCol, "└");
-    ctx.setCell(endRow, endCol, "┘");
-
+  private draw(s: ToolPointerState, ctx: ToolContext) {
+    if (this.base) ctx.grid.loadFromGrid(this.base);
+    drawBox(ctx.grid, bounds([{ row: s.startRow, col: s.startCol }, s]));
     ctx.render();
   }
 }

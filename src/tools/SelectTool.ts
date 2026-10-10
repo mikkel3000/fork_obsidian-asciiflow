@@ -1,3 +1,12 @@
+import {
+  Point,
+  Shape,
+  recognizeShape,
+  resizeShape,
+  shapeHandles,
+  samePoint,
+} from "../model/Drawing";
+import { charWidth } from "../model/CharWidth";
 import { Grid } from "../model/Grid";
 import { gridFromText, gridToText } from "../model/Serializer";
 import { ITool } from "./ITool";
@@ -21,10 +30,12 @@ export type DragPreview = {
 
 export class SelectTool implements ITool {
   id = "select";
+  private resizing: { shape: Shape; handle: number; base: Grid } | null = null;
   private selection: Selection | null = null;
   private renderHighlight: ((sel: Selection) => void) | null = null;
   private clearHighlight: (() => void) | null = null;
-  private renderDragPreview: ((preview: DragPreview | null) => void) | null = null;
+  private renderDragPreview: ((preview: DragPreview | null) => void) | null =
+    null;
   private draggingSelection = false;
   private draggingMoved = false;
   private dragOffset: { row: number; col: number } | null = null;
@@ -51,7 +62,18 @@ export class SelectTool implements ITool {
   }
 
   onPointerDown(state: ToolPointerState, ctx: ToolContext) {
-    if (this.selection && this.isInsideSelection(state.row, state.col, this.normalized())) {
+    const shape = this.selection
+      ? recognizeShape(ctx.grid, this.normalized())
+      : null;
+    const handle = shapeHandles(shape).findIndex((p) => samePoint(p, state));
+    if (shape && handle >= 0 && !state.ctrlKey) {
+      this.resizing = { shape, handle, base: ctx.grid.clone() };
+      return;
+    }
+    if (
+      this.selection &&
+      this.isInsideSelection(state.row, state.col, this.normalized())
+    ) {
       this.draggingSelection = true;
       this.draggingMoved = false;
       this.dragCopyMode = state.ctrlKey;
@@ -86,14 +108,27 @@ export class SelectTool implements ITool {
 
   onPointerMove(state: ToolPointerState, ctx: ToolContext) {
     if (!state.isDragging) return;
+    if (this.resizing) {
+      ctx.grid.loadFromGrid(this.resizing.base);
+      this.selection = resizeShape(
+        ctx.grid,
+        this.resizing.shape,
+        this.resizing.handle,
+        state,
+      );
+      this.drawHighlight();
+      ctx.render();
+      return;
+    }
     if (!this.selection) return;
     if (this.draggingSelection && this.dragOffset) {
-      // Update copy mode dynamically based on current ctrlKey state
-      this.dragCopyMode = state.ctrlKey;
+      // Once duplication is requested, releasing the modifier must not turn
+      // the same drag into a move and erase the original.
+      this.dragCopyMode ||= state.ctrlKey;
       this.draggingMoved = true;
       const size = this.getSelectionSize(this.selection);
-      const startRow = state.row - this.dragOffset.row;
-      const startCol = state.col - this.dragOffset.col;
+      const startRow = Math.max(0, state.row - this.dragOffset.row);
+      const startCol = Math.max(0, state.col - this.dragOffset.col);
       this.selection.startRow = startRow;
       this.selection.startCol = startCol;
       this.selection.endRow = startRow + size.rows - 1;
@@ -112,11 +147,23 @@ export class SelectTool implements ITool {
   }
 
   onPointerUp(state: ToolPointerState, ctx: ToolContext) {
+    if (this.resizing) {
+      this.onPointerMove({ ...state, isDragging: true }, ctx);
+      this.resizing = null;
+      return;
+    }
+    if (this.draggingSelection) {
+      this.onPointerMove({ ...state, isDragging: true }, ctx);
+    }
     // Clear drag preview overlay
     this.clearDragPreview();
 
     if (!this.selection) return;
-    if (this.draggingSelection && this.dragClipboard && this.dragSourceSelection) {
+    if (
+      this.draggingSelection &&
+      this.dragClipboard &&
+      this.dragSourceSelection
+    ) {
       if (!this.draggingMoved) {
         this.resetDragState();
         this.drawHighlight();
@@ -140,6 +187,12 @@ export class SelectTool implements ITool {
     ctx.render();
   }
 
+  snapshot(ctx: ToolContext): Grid | null {
+    return this.selection
+      ? this.captureSelection(ctx, this.normalized())
+      : null;
+  }
+
   /** Copy the selected region and return the text for system clipboard. */
   copy(ctx: ToolContext): string | null {
     if (!this.selection) return null;
@@ -161,9 +214,7 @@ export class SelectTool implements ITool {
     const externalGrid = gridFromText(text, 1, 1);
     const targetRow = this.selection ? this.normalized().startRow : 0;
     const targetCol = this.selection ? this.normalized().startCol : 0;
-    externalGrid.forEachCell(({ row, col, value }) => {
-      ctx.setCell(targetRow + row, targetCol + col, value);
-    });
+    this.placeGrid(externalGrid, targetRow, targetCol, ctx);
     ctx.render();
   }
 
@@ -186,6 +237,9 @@ export class SelectTool implements ITool {
   }
 
   clearSelection() {
+    this.resizing = null;
+    this.resetDragState();
+    this.clearDragPreview();
     this.selection = null;
     if (this.clearHighlight) this.clearHighlight();
   }
@@ -197,7 +251,12 @@ export class SelectTool implements ITool {
   }
 
   private showDragPreview() {
-    if (!this.dragClipboard || !this.dragSourceSelection || !this.renderDragPreview) return;
+    if (
+      !this.dragClipboard ||
+      !this.dragSourceSelection ||
+      !this.renderDragPreview
+    )
+      return;
     const target = this.normalized();
     this.renderDragPreview({
       grid: this.dragClipboard,
@@ -224,7 +283,12 @@ export class SelectTool implements ITool {
   }
 
   private isInsideSelection(row: number, col: number, sel: Selection) {
-    return row >= sel.startRow && row <= sel.endRow && col >= sel.startCol && col <= sel.endCol;
+    return (
+      row >= sel.startRow &&
+      row <= sel.endRow &&
+      col >= sel.startCol &&
+      col <= sel.endCol
+    );
   }
 
   private getSelectionSize(sel: Selection) {
@@ -263,9 +327,70 @@ export class SelectTool implements ITool {
     }
   }
 
-  private pasteGrid(ctx: ToolContext, grid: Grid, targetRow: number, targetCol: number) {
-    grid.forEachCell(({ row, col, value }) => {
-      ctx.setCell(targetRow + row, targetCol + col, value);
+  private pasteGrid(
+    ctx: ToolContext,
+    grid: Grid,
+    targetRow: number,
+    targetCol: number,
+  ) {
+    const { rows, cols } = grid.getSize();
+    for (let r = 0; r < rows; r++)
+      for (let c = 0; c < cols; c++)
+        ctx.setCell(targetRow + r, targetCol + c, grid.getCell(r, c));
+  }
+
+  setSelection(selection: Selection) {
+    this.selection = selection;
+    this.drawHighlight();
+  }
+
+  placeGrid(grid: Grid, row: number, col: number, ctx: ToolContext) {
+    this.pasteGrid(ctx, grid, row, col);
+    const { rows, cols } = grid.getSize();
+    this.setSelection({
+      startRow: row,
+      startCol: col,
+      endRow: row + rows - 1,
+      endCol: col + cols - 1,
     });
+    ctx.render();
+  }
+
+  nudge(dr: number, dc: number, ctx: ToolContext, copy = false) {
+    if (!this.selection) return;
+    const old = this.normalized(),
+      captured = this.captureSelection(ctx, old);
+    const row = Math.max(0, old.startRow + dr),
+      col = Math.max(0, old.startCol + dc);
+    if (!copy) this.clearRegion(ctx, old);
+    this.placeGrid(captured, row, col, ctx);
+  }
+
+  centerLabel(ctx: ToolContext) {
+    if (!this.selection) return;
+    const rect = this.normalized();
+    if (recognizeShape(ctx.grid, rect)?.kind !== "box") return;
+    for (let row = rect.startRow + 1; row < rect.endRow; row++) {
+      let text = "";
+      for (let col = rect.startCol + 1; col < rect.endCol; col++) {
+        const ch = ctx.getCell(row, col) || " ";
+        text += ch;
+        col += Math.max(1, charWidth(ch)) - 1;
+      }
+      text = text.trim();
+      let width = 0;
+      for (const ch of text) width += charWidth(ch);
+      for (let col = rect.startCol + 1; col < rect.endCol; col++)
+        ctx.setCell(row, col, "");
+      let col =
+        rect.startCol +
+        1 +
+        Math.floor((rect.endCol - rect.startCol - 1 - width) / 2);
+      for (const ch of text) {
+        ctx.setCell(row, col, ch);
+        col += charWidth(ch);
+      }
+    }
+    ctx.render();
   }
 }

@@ -13,7 +13,7 @@ export function gridFromText(text: string, minRows = 40, minCols = 120): Grid {
       return w;
     }),
     minCols,
-    1
+    1,
   );
   const grid = new Grid(rows, cols);
 
@@ -31,21 +31,25 @@ export function gridFromText(text: string, minRows = 40, minCols = 120): Grid {
 }
 
 export function gridToText(grid: Grid): string {
-  const { rows, cols } = grid.getSize();
+  const rows = new Map<number, { col: number; value: string }[]>();
+  let lastRow = -1;
+  grid.forEachCell(({ row, col, value }) => {
+    if (!rows.has(row)) rows.set(row, []);
+    rows.get(row)!.push({ col, value });
+    lastRow = Math.max(lastRow, row);
+  });
   const lines: string[] = [];
-
-  for (let r = 0; r < rows; r += 1) {
-    let line = "";
-    for (let c = 0; c < cols; c += 1) {
-      const ch = grid.getCell(r, c) || " ";
-      line += ch;
-      const width = charWidth(ch);
-      if (width > 1) {
-        c += width - 1;
-      }
+  for (let row = 0; row <= lastRow; row++) {
+    let line = "",
+      nextCol = 0;
+    for (const { col, value } of (rows.get(row) ?? []).sort(
+      (a, b) => a.col - b.col,
+    )) {
+      if (col < nextCol) continue;
+      line += " ".repeat(col - nextCol) + value;
+      nextCol = col + Math.max(1, charWidth(value));
     }
     lines.push(line.replace(/\s+$/g, ""));
   }
-
   return lines.join("\n").replace(/\n+$/g, "");
 }

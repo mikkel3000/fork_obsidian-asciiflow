@@ -1,5 +1,5 @@
+import { Point } from "../model/Drawing";
 import { Grid } from "../model/Grid";
-import { charWidth } from "../model/CharWidth";
 import { DragPreview } from "../tools/SelectTool";
 
 export type CanvasTheme = {
@@ -22,14 +22,29 @@ export class CanvasRenderer {
   private grid: Grid;
   private options: CanvasRendererOptions;
   private theme: CanvasTheme;
+  private hover: { point: Point; char: string; size: number } | null = null;
+  private handles: Point[] = [];
+  private cleanPreview = false;
+  private frame: number | null = null;
+  private disposed = false;
   private panX = 0;
   private panY = 0;
   private zoom = 1;
-  private selection: { startRow: number; startCol: number; endRow: number; endCol: number } | null = null;
+  private selection: {
+    startRow: number;
+    startCol: number;
+    endRow: number;
+    endCol: number;
+  } | null = null;
   private textCursor: { row: number; col: number } | null = null;
   private dragPreview: DragPreview | null = null;
 
-  constructor(canvas: HTMLCanvasElement, grid: Grid, options: CanvasRendererOptions, theme: CanvasTheme) {
+  constructor(
+    canvas: HTMLCanvasElement,
+    grid: Grid,
+    options: CanvasRendererOptions,
+    theme: CanvasTheme,
+  ) {
     const ctx = canvas.getContext("2d");
     if (!ctx) throw new Error("Canvas context not available");
 
@@ -77,10 +92,32 @@ export class CanvasRenderer {
     this.canvas.height = Math.floor(height * window.devicePixelRatio);
     this.canvas.style.width = `${width}px`;
     this.canvas.style.height = `${height}px`;
-    this.ctx.setTransform(window.devicePixelRatio, 0, 0, window.devicePixelRatio, 0, 0);
+    this.ctx.setTransform(
+      window.devicePixelRatio,
+      0,
+      0,
+      window.devicePixelRatio,
+      0,
+      0,
+    );
+    this.applyFont();
   }
 
   render() {
+    if (this.disposed || this.frame !== null) return;
+    this.frame = window.requestAnimationFrame(() => {
+      this.frame = null;
+      this.draw();
+    });
+  }
+
+  dispose() {
+    this.disposed = true;
+    if (this.frame !== null) window.cancelAnimationFrame(this.frame);
+    this.frame = null;
+  }
+
+  private draw() {
     const { cellWidth, cellHeight, showGrid } = this.options;
     const ctx = this.ctx;
     const canvasWidth = this.canvas.width / window.devicePixelRatio;
@@ -94,23 +131,35 @@ export class CanvasRenderer {
     ctx.translate(this.panX, this.panY);
     ctx.scale(this.zoom, this.zoom);
 
-    if (showGrid) {
+    if (showGrid && !this.cleanPreview) {
       ctx.strokeStyle = this.theme.grid || "#333";
       ctx.lineWidth = 1;
       ctx.beginPath();
 
-      const cols = Math.ceil(canvasWidth / (cellWidth * this.zoom));
-      const rows = Math.ceil(canvasHeight / (cellHeight * this.zoom));
+      const startCol = Math.max(
+        0,
+        Math.floor(-this.panX / (cellWidth * this.zoom)),
+      );
+      const startRow = Math.max(
+        0,
+        Math.floor(-this.panY / (cellHeight * this.zoom)),
+      );
+      const cols = Math.ceil(
+        (canvasWidth - this.panX) / (cellWidth * this.zoom),
+      );
+      const rows = Math.ceil(
+        (canvasHeight - this.panY) / (cellHeight * this.zoom),
+      );
 
-      for (let c = 0; c <= cols; c += 1) {
+      for (let c = startCol; c <= cols; c += 1) {
         const x = c * cellWidth;
-        ctx.moveTo(x, 0);
+        ctx.moveTo(x, startRow * cellHeight);
         ctx.lineTo(x, rows * cellHeight);
       }
 
-      for (let r = 0; r <= rows; r += 1) {
+      for (let r = startRow; r <= rows; r += 1) {
         const y = r * cellHeight;
-        ctx.moveTo(0, y);
+        ctx.moveTo(startCol * cellWidth, y);
         ctx.lineTo(cols * cellWidth, y);
       }
 
@@ -122,17 +171,43 @@ export class CanvasRenderer {
 
     this.grid.forEachCell(({ row, col, value }) => {
       if (row >= rows || col >= cols) return;
-      const x = col * cellWidth + 2;
+      const x = col * cellWidth;
       const y = row * cellHeight + cellHeight - 4;
+      if (
+        x * this.zoom + this.panX > canvasWidth ||
+        y * this.zoom + this.panY < 0 ||
+        (y - cellHeight) * this.zoom + this.panY > canvasHeight ||
+        (x + 2 * cellWidth) * this.zoom + this.panX < 0
+      )
+        return;
       ctx.fillText(value, x, y);
-      const width = charWidth(value);
-      if (width > 1) {
-        for (let i = 1; i < width; i += 1) {
-          ctx.clearRect(x + i * cellWidth - 1, y - cellHeight + 2, cellWidth, cellHeight);
-        }
-      }
     });
 
+    if (this.cleanPreview) {
+      ctx.restore();
+      return;
+    }
+    if (this.hover) {
+      const { point, char, size } = this.hover,
+        radius = Math.floor(size / 2);
+      ctx.fillStyle = "rgba(100,150,255,0.16)";
+      ctx.fillRect(
+        (point.col - radius) * cellWidth,
+        (point.row - radius) * cellHeight,
+        cellWidth * size,
+        cellHeight * size,
+      );
+      if (char) {
+        ctx.fillStyle = this.theme.foreground;
+        ctx.globalAlpha = 0.5;
+        ctx.fillText(
+          char,
+          point.col * cellWidth,
+          (point.row + 1) * cellHeight - 4,
+        );
+        ctx.globalAlpha = 1;
+      }
+    }
     // Draw selection highlight
     if (this.selection) {
       const { startRow, startCol, endRow, endCol } = this.selection;
@@ -149,20 +224,41 @@ export class CanvasRenderer {
 
     // Draw drag preview overlay
     if (this.dragPreview) {
-      const { grid: previewGrid, targetRow, targetCol, sourceSelection, copyMode } = this.dragPreview;
+      const {
+        grid: previewGrid,
+        targetRow,
+        targetCol,
+        sourceSelection,
+        copyMode,
+      } = this.dragPreview;
       // Dim the source region (move mode only)
       if (!copyMode) {
         const sx = sourceSelection.startCol * cellWidth;
         const sy = sourceSelection.startRow * cellHeight;
-        const sw = (sourceSelection.endCol - sourceSelection.startCol + 1) * cellWidth;
-        const sh = (sourceSelection.endRow - sourceSelection.startRow + 1) * cellHeight;
+        const sw =
+          (sourceSelection.endCol - sourceSelection.startCol + 1) * cellWidth;
+        const sh =
+          (sourceSelection.endRow - sourceSelection.startRow + 1) * cellHeight;
         ctx.fillStyle = "rgba(0, 0, 0, 0.4)";
         ctx.fillRect(sx, sy, sw, sh);
       }
+      // Red cells show existing content that the opaque paste will replace.
+      const previewSize = previewGrid.getSize();
+      for (let r = 0; r < previewSize.rows; r++)
+        for (let c = 0; c < previewSize.cols; c++) {
+          const old = this.grid.getCell(targetRow + r, targetCol + c);
+          ctx.fillStyle = old ? "rgba(255,90,90,0.35)" : this.theme.background;
+          ctx.fillRect(
+            (targetCol + c) * cellWidth,
+            (targetRow + r) * cellHeight,
+            cellWidth,
+            cellHeight,
+          );
+        }
       // Draw preview characters at target position
       ctx.fillStyle = this.theme.foreground || "#e0e0e0";
       previewGrid.forEachCell(({ row, col, value }) => {
-        const x = (targetCol + col) * cellWidth + 2;
+        const x = (targetCol + col) * cellWidth;
         const y = (targetRow + row) * cellHeight + cellHeight - 4;
         ctx.fillText(value, x, y);
       });
@@ -172,7 +268,9 @@ export class CanvasRenderer {
       const py = targetRow * cellHeight;
       const pw = pCols * cellWidth;
       const ph = pRows * cellHeight;
-      ctx.strokeStyle = copyMode ? "rgba(100, 255, 100, 0.7)" : "rgba(100, 150, 255, 0.7)";
+      ctx.strokeStyle = copyMode
+        ? "rgba(100, 255, 100, 0.7)"
+        : "rgba(100, 150, 255, 0.7)";
       ctx.lineWidth = 1.5;
       ctx.setLineDash([4, 4]);
       ctx.strokeRect(px, py, pw, ph);
@@ -188,10 +286,44 @@ export class CanvasRenderer {
       ctx.fillRect(x, y, 2, cellHeight);
     }
 
+    for (const p of this.handles) {
+      const size = 7 / this.zoom;
+      ctx.fillStyle = this.theme.background;
+      ctx.strokeStyle = "#6496ff";
+      ctx.fillRect(
+        (p.col + 0.5) * cellWidth - size / 2,
+        (p.row + 0.5) * cellHeight - size / 2,
+        size,
+        size,
+      );
+      ctx.strokeRect(
+        (p.col + 0.5) * cellWidth - size / 2,
+        (p.row + 0.5) * cellHeight - size / 2,
+        size,
+        size,
+      );
+    }
     ctx.restore();
   }
 
-  setSelection(sel: { startRow: number; startCol: number; endRow: number; endCol: number } | null) {
+  setHover(point: Point | null, char = "", size = 1) {
+    this.hover = point ? { point, char, size } : null;
+  }
+  setHandles(points: Point[]) {
+    this.handles = points;
+  }
+  setCleanPreview(value: boolean) {
+    this.cleanPreview = value;
+  }
+
+  setSelection(
+    sel: {
+      startRow: number;
+      startCol: number;
+      endRow: number;
+      endCol: number;
+    } | null,
+  ) {
     this.selection = sel;
   }
 

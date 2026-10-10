@@ -1,437 +1,1028 @@
 import React, { useEffect, useRef, useState } from "react";
 import { gridFromText, gridToText } from "../model/Serializer";
-import { CanvasRenderer, CanvasRendererOptions } from "../renderer/CanvasRenderer";
+import {
+  bounds,
+  drawPath,
+  Point,
+  recognizeShape,
+  route,
+  shapeHandles,
+} from "../model/Drawing";
+import { CanvasRenderer } from "../renderer/CanvasRenderer";
 import { InputHandler } from "../input/InputHandler";
 import { ToolManager } from "../tools/ToolManager";
-import { ToolContext } from "../tools/ToolContext";
 import { ToolId, ToolPointerState } from "../tools/ToolTypes";
+import { Grid } from "../model/Grid";
 
+export type EditorHandle = { requestClose: () => void; getText: () => string };
 export type AsciiFlowAppProps = {
   initialText: string;
-  onSave: (text: string) => void;
+  draft?: string;
+  onSave: (text: string) => Promise<void>;
   onCancel: () => void;
+  onDraft?: (text: string | null) => void;
+  onReady?: (handle: EditorHandle) => void;
 };
-
-const tools = [
-  { id: "select", label: "Select" },
-  { id: "box", label: "Box" },
-  { id: "line", label: "Line" },
-  { id: "arrow", label: "Arrow" },
-  { id: "text", label: "Text" },
-  { id: "freeform", label: "Freeform" }
+const toolList: { id: ToolId; label: string; key: string; hint: string }[] = [
+  {
+    id: "select",
+    label: "Select",
+    key: "V",
+    hint: "Drag to select · Drag inside to move · ⌘/Ctrl-drag to duplicate · Arrow keys nudge · Shift = 10 cells",
+  },
+  {
+    id: "box",
+    label: "Box",
+    key: "B",
+    hint: "Drag a box · Select its border and drag a corner handle to resize",
+  },
+  {
+    id: "line",
+    label: "Line",
+    key: "L",
+    hint: "Drag a connector · Shift switches the bend direction",
+  },
+  {
+    id: "arrow",
+    label: "Arrow",
+    key: "A",
+    hint: "Drag an arrow · Shift switches the bend · Turn on Waypoints for multiple bends",
+  },
+  {
+    id: "text",
+    label: "Text",
+    key: "T",
+    hint: "Click to type · Enter keeps label alignment · Escape finishes typing · Double-click anywhere to label",
+  },
+  {
+    id: "freeform",
+    label: "Draw",
+    key: "F",
+    hint: "Drag to paint · Hold Alt and click to pick a character",
+  },
+  {
+    id: "eraser",
+    label: "Erase",
+    key: "E",
+    hint: "Drag to erase · Choose a larger brush for larger areas",
+  },
 ];
-
-export function AsciiFlowApp({ initialText, onSave, onCancel }: AsciiFlowAppProps) {
-  const [activeTool, setActiveTool] = useState<ToolId>("box");
-  const [grid] = useState(() => gridFromText(initialText || "", 40, 120));
-  const [cursor, setCursor] = useState({ row: 0, col: 0 });
-  const [freeformChar, setFreeformChar] = useState("*");
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const rendererRef = useRef<CanvasRenderer | null>(null);
-  const inputRef = useRef<InputHandler | null>(null);
-  const toolManagerRef = useRef<ToolManager | null>(null);
-  const hiddenInputRef = useRef<HTMLTextAreaElement | null>(null);
-  const isComposingRef = useRef(false);
-  const activeToolRef = useRef<ToolId>(activeTool);
-  const pointerStateRef = useRef<ToolPointerState>({
-    startRow: 0,
-    startCol: 0,
-    row: 0,
-    col: 0,
-    isDragging: false,
-    ctrlKey: false
+export function AsciiFlowApp({
+  initialText,
+  draft,
+  onSave,
+  onCancel,
+  onDraft,
+  onReady,
+}: AsciiFlowAppProps) {
+  const [grid] = useState(() => gridFromText(draft ?? initialText));
+  const [saved, setSaved] = useState(() =>
+    gridToText(gridFromText(initialText)),
+  );
+  const [revision, setRevision] = useState(0);
+  const [tool, setTool] = useState<ToolId>("box");
+  const [char, setChar] = useState("*");
+  const [brush, setBrush] = useState(1);
+  const [waypoints, setWaypoints] = useState(false);
+  const [zoom, setZoom] = useState(100);
+  const [showGrid, setShowGrid] = useState(true);
+  const [preview, setPreview] = useState(false);
+  const [help, setHelp] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState(
+    draft !== undefined ? "Recovered your unsaved drawing." : "",
+  );
+  const [confirm, setConfirm] = useState<"close" | "clear" | null>(null);
+  const [cursor, setCursor] = useState<Point>({ row: 0, col: 0 });
+  const [pending, setPending] = useState(false);
+  const appRef = useRef<HTMLDivElement>(null),
+    canvasRef = useRef<HTMLCanvasElement>(null),
+    textRef = useRef<HTMLTextAreaElement>(null);
+  const rendererRef = useRef<CanvasRenderer | null>(null),
+    managerRef = useRef<ToolManager | null>(null);
+  const actions = useRef({
+    cancel: () => {},
+    finish: () => {},
+    fit: () => {},
+    zoom: (_factor: number) => {},
+    paste: (_text: string) => {},
+    selectAll: () => {},
+    duplicate: () => {},
   });
-
-  // Keep the ref in sync so pointer handlers always see the latest tool
-  useEffect(() => {
-    activeToolRef.current = activeTool;
-    // Deactivate text cursor when switching away from text tool
-    if (activeTool !== "text") {
-      toolManagerRef.current?.getTextTool().deactivate();
-      rendererRef.current?.setTextCursor(null);
+  const text = gridToText(grid),
+    dirty = text !== saved;
+  const live = useRef({
+    tool,
+    char,
+    brush,
+    waypoints,
+    saving,
+    preview,
+    dirty,
+    text,
+  });
+  live.current = { tool, char, brush, waypoints, saving, preview, dirty, text };
+  const requestClose = () => {
+    if (live.current.saving) return;
+    if (live.current.dirty) setConfirm("close");
+    else onCancel();
+  };
+  const save = async (close = false) => {
+    if (live.current.saving) return;
+    actions.current.finish();
+    const snapshot = gridToText(grid);
+    live.current.saving = true;
+    setSaving(true);
+    setError("");
+    try {
+      await onSave(snapshot);
+      setSaved(snapshot);
+      live.current.dirty = false;
+      live.current.text = snapshot;
+      onDraft?.(null);
+      setMessage("Saved to your note.");
+      if (close) onCancel();
+    } catch (e) {
+      setError(
+        e instanceof Error
+          ? e.message
+          : "Could not save. Your draft is preserved.",
+      );
+    } finally {
+      live.current.saving = false;
+      setSaving(false);
     }
-  }, [activeTool]);
-
-  // grid is mutated in-place by tools, so we can't rely on useMemo with a stable reference.
-  // Always read the current grid state when Save is clicked.
-  const getTextSnapshot = () => gridToText(grid);
+  };
+  const callbacks = useRef({ save, requestClose, onDraft });
+  callbacks.current = { save, requestClose, onDraft };
+  const chooseTool = (next: ToolId) => {
+    actions.current.cancel();
+    managerRef.current?.getTextTool().deactivate();
+    live.current.tool = next;
+    setTool(next);
+    managerRef.current?.setActiveTool(next);
+    rendererRef.current?.setTextCursor(null);
+    if (next !== "select") managerRef.current?.getSelectTool().clearSelection();
+    canvasRef.current?.focus();
+    rendererRef.current?.render();
+  };
+  const chooseRef = useRef(chooseTool);
+  chooseRef.current = chooseTool;
+  useEffect(() => {
+    onReady?.({
+      requestClose: () => callbacks.current.requestClose(),
+      getText: () => gridToText(grid),
+    });
+    return () => {
+      callbacks.current.onDraft?.(
+        !live.current.dirty ? null : gridToText(grid),
+      );
+    };
+  }, []);
+  useEffect(() => {
+    const timer = setTimeout(() => onDraft?.(dirty ? text : null), 400);
+    return () => clearTimeout(timer);
+  }, [text, dirty, onDraft]);
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const options: CanvasRendererOptions = {
-      cellWidth: 12,
-      cellHeight: 18,
-      fontFamily: "var(--font-monospace)",
-      fontSize: 14,
-      showGrid: true
+    const canvas = canvasRef.current!,
+      textarea = textRef.current!,
+      win = canvas.ownerDocument.defaultView!;
+    const style = win.getComputedStyle(canvas);
+    const fontFamily =
+      style.getPropertyValue("--font-monospace").trim() || "monospace";
+    const measure = canvas.getContext("2d")!;
+    measure.font = `14px ${fontFamily}`;
+    const cellWidth = measure.measureText("M").width || 8.4,
+      cellHeight = 18;
+    const theme = () => {
+      const s = win.getComputedStyle(canvas);
+      return {
+        background:
+          s.getPropertyValue("--background-primary").trim() || "#1e1e1e",
+        foreground: s.getPropertyValue("--text-normal").trim() || "#e0e0e0",
+        grid:
+          s.getPropertyValue("--background-modifier-border").trim() || "#333",
+      };
     };
-
     const renderer = new CanvasRenderer(
       canvas,
       grid,
-      options,
-      {
-        background: getComputedStyle(document.body).getPropertyValue("--background-primary") || "#1e1e1e",
-        foreground: getComputedStyle(document.body).getPropertyValue("--text-normal") || "#e0e0e0",
-        grid: getComputedStyle(document.body).getPropertyValue("--background-modifier-border") || "#333"
-      }
+      { cellWidth, cellHeight, fontFamily, fontSize: 14, showGrid: true },
+      theme(),
     );
-
     rendererRef.current = renderer;
-    toolManagerRef.current = new ToolManager(grid, () => renderer.render());
-
-    // Wire select tool highlight to renderer
-    const selectTool = toolManagerRef.current.getSelectTool();
-    selectTool.setRenderHighlight((sel) => {
-      renderer.setSelection(sel);
-    });
-    selectTool.setClearHighlight(() => {
-      renderer.setSelection(null);
-    });
-    selectTool.setRenderDragPreview((preview) => {
-      renderer.setDragPreview(preview);
-    });
-
-    // Wire text tool cursor to renderer
-    const textTool = toolManagerRef.current.getTextTool();
+    let hover: Point = { row: 0, col: 0 },
+      composing = false,
+      gesture = false;
+    let paste: Grid | null = null,
+      vertices: Point[] = [],
+      pathBase: Grid | null = null,
+      pathPreview: Point[] = [];
+    const update = () => {
+      const selection = manager.getSelectTool().getSelection();
+      renderer.setHandles(
+        selection && live.current.tool === "select"
+          ? shapeHandles(
+              recognizeShape(grid, manager.getSelectTool().normalized()),
+            )
+          : [],
+      );
+      renderer.render();
+      setRevision((value) => value + 1);
+    };
+    const manager = new ToolManager(grid, update);
+    managerRef.current = manager;
+    const selection = manager.getSelectTool(),
+      textTool = manager.getTextTool();
+    selection.setRenderHighlight((s) => renderer.setSelection(s));
+    selection.setClearHighlight(() => renderer.setSelection(null));
+    selection.setRenderDragPreview((p) => renderer.setDragPreview(p));
     textTool.setOnCursorChange((row, col) => {
-      renderer.setTextCursor(row !== null && col !== null ? { row, col } : null);
+      renderer.setTextCursor(
+        row === null || col === null ? null : { row, col },
+      );
+      if (row !== null && col !== null) setCursor({ row, col });
     });
-
     const resize = () => {
-      const rect = canvas.parentElement?.getBoundingClientRect();
-      if (!rect) return;
+      const rect = canvas.parentElement!.getBoundingClientRect();
       renderer.resize(rect.width, rect.height);
       renderer.render();
     };
-
+    const resizeObserver = new ResizeObserver(resize);
+    resizeObserver.observe(canvas.parentElement!);
     resize();
-    window.addEventListener("resize", resize);
-
-    inputRef.current = new InputHandler(
-      canvas,
-      { cellWidth: options.cellWidth, cellHeight: options.cellHeight },
-      (row, col, ctrlKey) => {
-        setCursor({ row, col });
-        const state = pointerStateRef.current;
-        state.startRow = row;
-        state.startCol = col;
-        state.row = row;
-        state.col = col;
-        state.ctrlKey = ctrlKey;
-        state.isDragging = true;
-        toolManagerRef.current?.setActiveTool(activeToolRef.current);
-        toolManagerRef.current?.handlePointerDown({ ...state });
-      },
-      (row, col, ctrlKey) => {
-        setCursor({ row, col });
-        const state = pointerStateRef.current;
-        state.row = row;
-        state.col = col;
-        state.ctrlKey = ctrlKey;
-        toolManagerRef.current?.handlePointerMove({ ...state });
-      },
-      (row, col, ctrlKey) => {
-        const state = pointerStateRef.current;
-        state.row = row;
-        state.col = col;
-        state.ctrlKey = ctrlKey;
-        state.isDragging = false;
-        toolManagerRef.current?.handlePointerUp({ ...state });
+    const observer = new MutationObserver(() => {
+      renderer.setTheme(theme());
+      renderer.render();
+    });
+    observer.observe(canvas.ownerDocument.body, {
+      attributes: true,
+      attributeFilter: ["class", "style"],
+    });
+    const refreshHover = (p: Point | null, shift = false) => {
+      if (!p) {
+        renderer.setHover(null);
+        renderer.render();
+        return;
       }
-    );
-
-    const handleKey = (event: KeyboardEvent) => {
-      // Skip all key handling during IME composition
-      if (isComposingRef.current) return;
-
-      if (event.ctrlKey && event.key.toLowerCase() === "z") {
+      hover = p;
+      setCursor(p);
+      if (paste) {
+        renderer.setDragPreview({
+          grid: paste,
+          targetRow: p.row,
+          targetCol: p.col,
+          copyMode: true,
+          sourceSelection: { startRow: 0, startCol: 0, endRow: 0, endCol: 0 },
+        });
+      } else if (pathBase && vertices.length) {
+        grid.loadFromGrid(pathBase);
+        pathPreview = [];
+        const all = [...vertices, p];
+        for (let i = 1; i < all.length; i++)
+          pathPreview.push(
+            ...route(all[i - 1], all[i], shift).slice(i === 1 ? 0 : 1),
+          );
+        drawPath(grid, pathPreview, live.current.tool === "arrow");
+      }
+      renderer.setHover(
+        p,
+        live.current.tool === "freeform" ? live.current.char : "",
+        live.current.tool === "eraser" ? live.current.brush : 1,
+      );
+      renderer.render();
+    };
+    const finishPath = () => {
+      if (!pathBase) return;
+      const final = grid.clone();
+      grid.loadFromGrid(pathBase);
+      pathBase = null;
+      vertices = [];
+      pathPreview = [];
+      manager.edit((ctx) => ctx.grid.loadFromGrid(final));
+      setPending(false);
+    };
+    const finishPaste = () => {
+      if (!paste) return;
+      const content = paste;
+      paste = null;
+      renderer.setDragPreview(null);
+      manager.edit((ctx) =>
+        selection.placeGrid(content, hover.row, hover.col, ctx),
+      );
+      setPending(false);
+    };
+    const cancel = () => {
+      if (gesture) manager.cancelGesture();
+      gesture = false;
+      if (pathBase) grid.loadFromGrid(pathBase);
+      pathBase = null;
+      vertices = [];
+      paste = null;
+      renderer.setDragPreview(null);
+      setPending(false);
+      update();
+    };
+    const zoomAt = (factor: number, x: number, y: number) => {
+      const old = renderer.getZoom(),
+        pan = renderer.getPan();
+      renderer.setZoom(old * factor);
+      const ratio = renderer.getZoom() / old;
+      renderer.setPan(x - (x - pan.x) * ratio, y - (y - pan.y) * ratio);
+      setZoom(Math.round(renderer.getZoom() * 100));
+      renderer.render();
+    };
+    actions.current = {
+      cancel,
+      finish: () => {
+        finishPath();
+        finishPaste();
+      },
+      zoom: (factor) =>
+        zoomAt(factor, canvas.clientWidth / 2, canvas.clientHeight / 2),
+      fit: () => {
+        const b = grid.getBounds(),
+          width = (b.endCol + 2) * cellWidth,
+          height = (b.endRow + 2) * cellHeight;
+        renderer.setZoom(
+          Math.min(
+            (canvas.clientWidth - 32) / width,
+            (canvas.clientHeight - 32) / height,
+            1.5,
+          ),
+        );
+        renderer.setPan(16, 16);
+        setZoom(Math.round(renderer.getZoom() * 100));
+        renderer.render();
+      },
+      paste: (content) => {
+        cancel();
+        textTool.deactivate();
+        live.current.tool = "select";
+        setTool("select");
+        manager.setActiveTool("select");
+        paste = gridFromText(content, 1, 1);
+        setPending(true);
+        refreshHover(hover);
+        canvas.focus();
+      },
+      duplicate: () => {
+        if (!selection.getSelection()) return;
+        const source = selection.normalized();
+        let captured: Grid | null = null;
+        manager.edit((ctx) => {
+          captured = selection.snapshot(ctx);
+        });
+        if (!captured) return;
+        cancel();
+        textTool.deactivate();
+        live.current.tool = "select";
+        setTool("select");
+        manager.setActiveTool("select");
+        paste = captured;
+        setPending(true);
+        refreshHover({ row: source.startRow, col: source.endCol + 2 });
+        setMessage(
+          "Position the duplicate, then click or press Enter. Escape cancels.",
+        );
+        canvas.focus();
+      },
+      selectAll: () => {
+        const b = grid.getBounds();
+        chooseRef.current("select");
+        selection.setSelection({
+          startRow: 0,
+          startCol: 0,
+          endRow: b.endRow,
+          endCol: Math.max(0, b.endCol - 1),
+        });
+        update();
+      },
+    };
+    const input = new InputHandler(canvas, {
+      cellWidth,
+      cellHeight,
+      view: () => ({ ...renderer.getPan(), zoom: renderer.getZoom() }),
+      pan: (dx, dy) => {
+        const pan = renderer.getPan();
+        renderer.setPan(Math.min(32, pan.x + dx), Math.min(32, pan.y + dy));
+        renderer.render();
+      },
+      zoom: zoomAt,
+      hover: refreshHover,
+      cancel,
+      down: (s) => {
+        if (live.current.saving || live.current.preview) return;
+        hover = s;
+        if (paste) {
+          finishPaste();
+          return;
+        }
+        if (
+          live.current.waypoints &&
+          (live.current.tool === "line" || live.current.tool === "arrow")
+        ) {
+          if (!pathBase) pathBase = grid.clone();
+          vertices.push({ row: s.row, col: s.col });
+          setPending(true);
+          refreshHover(s, !!s.shiftKey);
+          return;
+        }
+        manager.setActiveTool(live.current.tool);
+        manager.setFreeformChar(live.current.char);
+        manager.setBrushSize(live.current.brush);
+        gesture = true;
+        manager.handlePointerDown(s);
+        setCursor(s);
+        if (live.current.tool === "text")
+          textarea.focus({ preventScroll: true });
+      },
+      move: (s) => {
+        if (gesture) manager.handlePointerMove(s);
+        setCursor(s);
+      },
+      up: (s) => {
+        if (gesture) {
+          manager.handlePointerUp(s);
+          gesture = false;
+          update();
+          if (live.current.tool === "text")
+            textarea.focus({ preventScroll: true });
+        }
+      },
+    });
+    const dblclick = (event: MouseEvent) => {
+      if (live.current.preview || live.current.saving) return;
+      if (pathBase) {
+        finishPath();
+        return;
+      }
+      const p = input.cell(event);
+      chooseRef.current("text");
+      manager.handlePointerDown({
+        ...p,
+        startRow: p.row,
+        startCol: p.col,
+        isDragging: false,
+        ctrlKey: false,
+      });
+      manager.handlePointerUp({
+        ...p,
+        startRow: p.row,
+        startCol: p.col,
+        isDragging: false,
+        ctrlKey: false,
+      });
+      textarea.focus({ preventScroll: true });
+    };
+    const pick = (event: PointerEvent) => {
+      if (!event.altKey || live.current.tool !== "freeform") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const p = input.cell(event);
+      const value = grid.getCell(p.row, p.col);
+      if (value) {
+        setChar(value);
+        live.current.char = value;
+        setMessage(`Picked “${value}”.`);
+      }
+    };
+    canvas.addEventListener("dblclick", dblclick);
+    canvas.addEventListener("pointerdown", pick, true);
+    const isField = (event: Event) =>
+      event.target !== textarea &&
+      (event.target as HTMLElement).matches(
+        "input,textarea,select,[contenteditable=true]",
+      );
+    const local = (event: Event) =>
+      appRef.current?.contains(event.target as Node);
+    const keydown = (event: KeyboardEvent) => {
+      if (!local(event) || isField(event) || composing || live.current.saving)
+        return;
+      const key = event.key.toLowerCase(),
+        mod = event.ctrlKey || event.metaKey;
+      if (mod && key === "s") {
         event.preventDefault();
-        if (event.shiftKey) {
-          toolManagerRef.current?.redo();
-        } else {
-          toolManagerRef.current?.undo();
+        event.stopPropagation();
+        void callbacks.current.save(event.shiftKey);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (paste || pathBase || gesture) cancel();
+        else if (textTool.isActive()) {
+          textTool.deactivate();
+          canvas.focus();
+          renderer.render();
+        } else if (selection.getSelection()) {
+          selection.clearSelection();
+          update();
+        } else callbacks.current.requestClose();
+        return;
+      }
+      if (live.current.preview) return;
+      if (mod && (key === "z" || key === "y")) {
+        event.preventDefault();
+        event.stopPropagation();
+        cancel();
+        if (event.shiftKey || key === "y") manager.redo();
+        else manager.undo();
+        update();
+        return;
+      }
+      if (mod && key === "a" && !textTool.isActive()) {
+        event.preventDefault();
+        actions.current.selectAll();
+        return;
+      }
+      if (event.key === "Enter" && (paste || pathBase)) {
+        event.preventDefault();
+        actions.current.finish();
+        return;
+      }
+      if (textTool.isActive()) {
+        if (
+          !mod &&
+          [
+            "Backspace",
+            "Delete",
+            "Enter",
+            "Tab",
+            "ArrowLeft",
+            "ArrowRight",
+            "ArrowUp",
+            "ArrowDown",
+          ].includes(event.key)
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+          manager.edit(
+            (ctx) => textTool.handleKey(event.key, ctx),
+            ["Backspace", "Delete"].includes(event.key) ? "delete" : "",
+          );
         }
         return;
       }
-
-      // Text tool inline typing
-      const textTool = toolManagerRef.current?.getTextTool();
-      if (textTool && textTool.isActive()) {
-        if (event.ctrlKey || event.metaKey) {
-          // Allow Ctrl+C/V/X etc. to pass through even when text tool is active
-          // but only for specific shortcuts
-          if (event.key.toLowerCase() === "c" || event.key.toLowerCase() === "x") {
-            // fall through to select tool handling below
-          } else if (event.key.toLowerCase() === "v") {
-            // paste is handled by the 'paste' event listener — just prevent default here
-            event.preventDefault();
-            return;
-          } else {
-            return;
-          }
-        } else if (event.key === "Backspace" || event.key === "Delete" || event.key === "Enter" ||
-                   event.key === "Escape" || event.key === "Tab" ||
-                   event.key.startsWith("Arrow")) {
-          event.preventDefault();
-          const ctx: ToolContext = {
-            grid,
-            setCell: (r, c, v) => grid.setCell(r, c, v),
-            getCell: (r, c) => grid.getCell(r, c),
-            render: () => renderer.render(),
-          };
-          textTool.handleKey(event.key, ctx);
-          return;
-        } else if (event.key.length === 1) {
-          // Single printable chars are handled via hidden textarea input event
-          // (supports IME). Only handle directly if not coming from a composition.
-          // The hidden textarea will fire 'input' for direct key presses too.
-          return;
-        }
-      }
-
-      // Select tool shortcuts
-      const sel = toolManagerRef.current?.getSelectTool();
-      if (sel && sel.getSelection()) {
+      if (selection.getSelection() && live.current.tool === "select") {
         if (event.key === "Delete" || event.key === "Backspace") {
           event.preventDefault();
-          sel.deleteSelection({
-            grid,
-            setCell: (r, c, v) => grid.setCell(r, c, v),
-            getCell: (r, c) => grid.getCell(r, c),
-            render: () => renderer.render(),
-          });
+          manager.edit((ctx) => selection.deleteSelection(ctx));
+          return;
         }
-        if (event.ctrlKey && event.key.toLowerCase() === "c") {
-          event.preventDefault();
-          const text = sel.copy({
-            grid,
-            setCell: (r, c, v) => grid.setCell(r, c, v),
-            getCell: (r, c) => grid.getCell(r, c),
-            render: () => renderer.render(),
-          });
-          if (text !== null) {
-            navigator.clipboard.writeText(text).catch(() => {});
-          }
-        }
-        if (event.ctrlKey && event.key.toLowerCase() === "x") {
-          event.preventDefault();
-          const text = sel.cut({
-            grid,
-            setCell: (r, c, v) => grid.setCell(r, c, v),
-            getCell: (r, c) => grid.getCell(r, c),
-            render: () => renderer.render(),
-          });
-          if (text !== null) {
-            navigator.clipboard.writeText(text).catch(() => {});
-          }
-        }
-      }
-    };
-
-    // Unified paste handler using the 'paste' event (works even when
-    // the hidden textarea has focus, which is the case when the text tool is active).
-    const handlePaste = (event: ClipboardEvent) => {
-      const text = event.clipboardData?.getData("text/plain");
-      if (!text) return;
-      event.preventDefault();
-
-      const textTool = toolManagerRef.current?.getTextTool();
-      if (textTool && textTool.isActive()) {
-        const ctx: ToolContext = {
-          grid,
-          setCell: (r, c, v) => grid.setCell(r, c, v),
-          getCell: (r, c) => grid.getCell(r, c),
-          render: () => renderer.render(),
+        const delta: Record<string, [number, number]> = {
+          ArrowUp: [-1, 0],
+          ArrowDown: [1, 0],
+          ArrowLeft: [0, -1],
+          ArrowRight: [0, 1],
         };
-        textTool.pasteText(text, ctx);
-      } else {
-        const sel = toolManagerRef.current?.getSelectTool();
-        if (sel) {
-          sel.paste(text, {
-            grid,
-            setCell: (r, c, v) => grid.setCell(r, c, v),
-            getCell: (r, c) => grid.getCell(r, c),
-            render: () => renderer.render(),
-          });
+        if (delta[event.key]) {
+          event.preventDefault();
+          const [dr, dc] = delta[event.key],
+            step = event.shiftKey ? 10 : 1;
+          manager.edit((ctx) =>
+            selection.nudge(dr * step, dc * step, ctx, event.altKey),
+          );
+          return;
+        }
+        if (mod && key === "d") {
+          event.preventDefault();
+          event.stopPropagation();
+          actions.current.duplicate();
+          return;
         }
       }
-    };
-
-    window.addEventListener("keydown", handleKey);
-    window.addEventListener("paste", handlePaste);
-
-    return () => {
-      window.removeEventListener("resize", resize);
-      window.removeEventListener("keydown", handleKey);
-      window.removeEventListener("paste", handlePaste);
-      inputRef.current?.detach();
-    };
-  }, [grid]);
-
-  useEffect(() => {
-    toolManagerRef.current?.setFreeformChar(freeformChar);
-  }, [freeformChar]);
-
-  // Hidden textarea for IME (Input Method Editor) support
-  // When text tool is active, we keep a hidden textarea focused so that
-  // composition events (Chinese, Japanese, Korean input) work correctly.
-  useEffect(() => {
-    const textarea = hiddenInputRef.current;
-    if (!textarea) return;
-
-    const handleCompositionStart = () => {
-      isComposingRef.current = true;
-    };
-
-    const handleCompositionEnd = () => {
-      isComposingRef.current = false;
-      // Process the committed text from composition
-      const textTool = toolManagerRef.current?.getTextTool();
-      if (!textTool || !textTool.isActive()) return;
-
-      const value = textarea.value;
-      if (!value) return;
-
-      const ctx: ToolContext = {
-        grid,
-        setCell: (r, c, v) => grid.setCell(r, c, v),
-        getCell: (r, c) => grid.getCell(r, c),
-        render: () => rendererRef.current?.render() ?? (() => {}),
-      };
-
-      for (const ch of value) {
-        textTool.handleChar(ch, ctx);
-      }
-
-      // Clear the textarea so it's ready for the next input
-      textarea.value = "";
-    };
-
-    const handleInput = () => {
-      // During IME composition, do NOT process input — let the IME work.
-      // Only handle direct (non-IME) key presses here.
-      if (isComposingRef.current) return;
-
-      const textTool = toolManagerRef.current?.getTextTool();
-      if (!textTool || !textTool.isActive()) return;
-
-      const value = textarea.value;
-      if (!value) return;
-
-      const ctx: ToolContext = {
-        grid,
-        setCell: (r, c, v) => grid.setCell(r, c, v),
-        getCell: (r, c) => grid.getCell(r, c),
-        render: () => rendererRef.current?.render() ?? (() => {}),
-      };
-
-      for (const ch of value) {
-        textTool.handleChar(ch, ctx);
-      }
-
-      // Clear the textarea so it's ready for the next input
-      textarea.value = "";
-    };
-
-    textarea.addEventListener("compositionstart", handleCompositionStart);
-    textarea.addEventListener("compositionend", handleCompositionEnd);
-    textarea.addEventListener("input", handleInput);
-
-    return () => {
-      textarea.removeEventListener("compositionstart", handleCompositionStart);
-      textarea.removeEventListener("compositionend", handleCompositionEnd);
-      textarea.removeEventListener("input", handleInput);
-    };
-  }, [grid]);
-
-  // Focus the hidden textarea when text tool becomes active and cursor is placed
-  useEffect(() => {
-    const textarea = hiddenInputRef.current;
-    if (!textarea) return;
-
-    if (activeTool === "text") {
-      // Focus on next tick so click event doesn't steal focus
-      const timer = setTimeout(() => textarea.focus(), 0);
-      return () => clearTimeout(timer);
-    }
-  }, [activeTool, cursor]);
-
-  useEffect(() => {
-    const handleKey = (event: KeyboardEvent) => {
-      if (event.altKey) {
-        const map: Record<string, ToolId> = {
-          "1": "select",
-          "2": "box",
-          "3": "line",
-          "4": "arrow",
-          "5": "text",
-          "6": "freeform"
-        };
-        const next = map[event.key];
+      if (!mod && !event.altKey) {
+        const next = toolList.find((t) => t.key.toLowerCase() === key);
         if (next) {
           event.preventDefault();
-          setActiveTool(next);
-          toolManagerRef.current?.setActiveTool(next);
-        }
+          chooseRef.current(next.id);
+        } else if (key === "?") setHelp((value) => !value);
+        else if (key === "+" || key === "=") actions.current.zoom(1.2);
+        else if (key === "-") actions.current.zoom(1 / 1.2);
+        else if (key === "0") actions.current.fit();
       }
     };
-
-    window.addEventListener("keydown", handleKey);
-    return () => window.removeEventListener("keydown", handleKey);
-  }, []);
-
+    const pasteEvent = (event: ClipboardEvent) => {
+      if (
+        !local(event) ||
+        isField(event) ||
+        live.current.preview ||
+        live.current.saving
+      )
+        return;
+      const content = event.clipboardData?.getData("text/plain");
+      if (content === undefined) return;
+      event.preventDefault();
+      if (textTool.isActive())
+        manager.edit((ctx) => textTool.pasteText(content, ctx));
+      else actions.current.paste(content);
+    };
+    const clipboard = (event: ClipboardEvent) => {
+      if (
+        !local(event) ||
+        isField(event) ||
+        live.current.saving ||
+        live.current.preview ||
+        live.current.tool !== "select" ||
+        !selection.getSelection() ||
+        !event.clipboardData
+      )
+        return;
+      let content: string | null = null;
+      manager.edit((ctx) => {
+        content = selection.copy(ctx);
+      });
+      if (content !== null) {
+        event.clipboardData.setData("text/plain", content);
+        event.preventDefault();
+        if (event.type === "cut")
+          manager.edit((ctx) => selection.deleteSelection(ctx));
+      }
+    };
+    const acceptText = () => {
+      if (composing || !textTool.isActive() || live.current.saving) return;
+      const value = textarea.value;
+      textarea.value = "";
+      if (!value) return;
+      manager.edit((ctx) => {
+        for (const ch of value) textTool.handleChar(ch, ctx);
+      }, "typing");
+    };
+    const compositionStart = () => {
+        composing = true;
+      },
+      compositionEnd = () => {
+        composing = false;
+        acceptText();
+      };
+    textarea.addEventListener("compositionstart", compositionStart);
+    textarea.addEventListener("compositionend", compositionEnd);
+    textarea.addEventListener("input", acceptText);
+    appRef.current!.addEventListener("keydown", keydown);
+    appRef.current!.addEventListener("paste", pasteEvent);
+    appRef.current!.addEventListener("copy", clipboard);
+    appRef.current!.addEventListener("cut", clipboard);
+    const app = appRef.current!;
+    return () => {
+      if (pathBase) grid.loadFromGrid(pathBase);
+      input.detach();
+      resizeObserver.disconnect();
+      observer.disconnect();
+      renderer.dispose();
+      canvas.removeEventListener("dblclick", dblclick);
+      canvas.removeEventListener("pointerdown", pick, true);
+      app.removeEventListener("keydown", keydown);
+      app.removeEventListener("paste", pasteEvent);
+      app.removeEventListener("copy", clipboard);
+      app.removeEventListener("cut", clipboard);
+      textarea.removeEventListener("compositionstart", compositionStart);
+      textarea.removeEventListener("compositionend", compositionEnd);
+      textarea.removeEventListener("input", acceptText);
+    };
+  }, [grid]);
+  useEffect(() => {
+    rendererRef.current?.setOptions({ showGrid });
+    rendererRef.current?.render();
+  }, [showGrid]);
+  useEffect(() => {
+    actions.current.cancel();
+    rendererRef.current?.setCleanPreview(preview);
+    rendererRef.current?.render();
+  }, [preview]);
+  const selected = managerRef.current?.getSelectTool().getSelection();
+  const selectedShape = selected
+    ? recognizeShape(grid, managerRef.current!.getSelectTool().normalized())
+    : null;
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(gridToText(grid));
+      setMessage("Drawing copied.");
+    } catch {
+      setError("Clipboard unavailable. Use Preview and copy the text below.");
+      setPreview(true);
+    }
+  };
+  const exportText = () => {
+    const url = URL.createObjectURL(
+      new Blob([gridToText(grid)], { type: "text/plain;charset=utf-8" }),
+    );
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "diagram.txt";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setMessage("Exported diagram.txt.");
+  };
   return (
-    <div className="asciiflow-app">
-      <div className="asciiflow-toolbar">
-        {tools.map((tool) => (
+    <div className="asciiflow-app" ref={appRef}>
+      <div className="asciiflow-document-bar">
+        <strong>ASCIIFlow</strong>
+        <span className="asciiflow-save-state" role="status">
+          {saving
+            ? "Saving…"
+            : dirty
+              ? "Unsaved changes · draft kept"
+              : "Saved"}
+        </span>
+        <div className="asciiflow-spacer" />
+        <button
+          onClick={() => setHelp(!help)}
+          aria-expanded={help}
+          title="Keyboard shortcuts (?)"
+        >
+          Help
+        </button>
+        <button onClick={copy}>Copy drawing</button>
+        <button onClick={exportText}>Export .txt</button>
+        <button
+          className="mod-cta"
+          disabled={saving}
+          onClick={() => void save()}
+          title="⌘/Ctrl+S"
+        >
+          Save
+        </button>
+        <button
+          disabled={saving}
+          onClick={() => void save(true)}
+          title="⌘/Ctrl+Shift+S"
+        >
+          Save & close
+        </button>
+        <button disabled={saving} onClick={requestClose}>
+          Close
+        </button>
+      </div>
+      <fieldset
+        className="asciiflow-toolbar"
+        disabled={saving || preview}
+        aria-label="Drawing tools"
+      >
+        {toolList.map((item) => (
           <button
-            key={tool.id}
-            className={tool.id === activeTool ? "active" : undefined}
-            onClick={() => setActiveTool(tool.id as ToolId)}
+            key={item.id}
+            aria-pressed={tool === item.id}
+            className={tool === item.id ? "active" : ""}
+            title={`${item.label} (${item.key}) — ${item.hint}`}
+            onClick={() => chooseTool(item.id)}
           >
-            {tool.label}
+            {item.label}
+            <kbd>{item.key}</kbd>
           </button>
         ))}
-        <input
-          type="text"
-          placeholder="Char"
-          value={freeformChar}
-          maxLength={1}
-          onChange={(event) => {
-            const next = event.target.value || "*";
-            setFreeformChar(next);
-            toolManagerRef.current?.setFreeformChar(next);
+        {tool === "freeform" && (
+          <label>
+            Character{" "}
+            <input
+              aria-label="Drawing character"
+              value={char}
+              onChange={(e) => setChar(Array.from(e.target.value)[0] || "*")}
+              className="asciiflow-character"
+            />
+          </label>
+        )}
+        {tool === "eraser" && (
+          <label>
+            Brush{" "}
+            <select
+              value={brush}
+              onChange={(e) => setBrush(Number(e.target.value))}
+            >
+              <option value={1}>1 cell</option>
+              <option value={3}>3 × 3</option>
+              <option value={5}>5 × 5</option>
+            </select>
+          </label>
+        )}
+        {(tool === "arrow" || tool === "line") && (
+          <label>
+            <input
+              type="checkbox"
+              checked={waypoints}
+              onChange={(e) => {
+                actions.current.cancel();
+                setWaypoints(e.target.checked);
+              }}
+            />
+            Waypoints
+          </label>
+        )}
+      </fieldset>
+      <div
+        className="asciiflow-toolbar"
+        role="group"
+        aria-label="Edit and view"
+      >
+        <button
+          disabled={saving || preview || !managerRef.current?.canUndo}
+          onClick={() => {
+            actions.current.cancel();
+            managerRef.current?.undo();
+            setRevision((v) => v + 1);
           }}
-          style={{ width: 40, textAlign: "center" }}
-        />
-        <div style={{ flex: 1 }} />
-        <button onClick={() => toolManagerRef.current?.undo()}>Undo</button>
-        <button onClick={() => toolManagerRef.current?.redo()}>Redo</button>
-        <button onClick={() => onSave(getTextSnapshot())}>Save</button>
-        <button onClick={onCancel}>Cancel</button>
+          title="⌘/Ctrl+Z"
+        >
+          Undo
+        </button>
+        <button
+          disabled={saving || preview || !managerRef.current?.canRedo}
+          onClick={() => {
+            actions.current.cancel();
+            managerRef.current?.redo();
+            setRevision((v) => v + 1);
+          }}
+          title="⌘/Ctrl+Shift+Z"
+        >
+          Redo
+        </button>
+        <button
+          disabled={saving || preview}
+          onClick={() => actions.current.selectAll()}
+        >
+          Select all
+        </button>
+        <button
+          disabled={saving || preview || !selected}
+          onClick={() => actions.current.duplicate()}
+          title="⌘/Ctrl+D"
+        >
+          Duplicate
+        </button>
+        <button
+          disabled={saving || preview || selectedShape?.kind !== "box"}
+          onClick={() =>
+            managerRef.current?.edit((ctx) =>
+              managerRef.current!.getSelectTool().centerLabel(ctx),
+            )
+          }
+        >
+          Center label
+        </button>
+        <button
+          disabled={saving || preview || !text}
+          onClick={() => setConfirm("clear")}
+        >
+          Clear
+        </button>
+        <div className="asciiflow-spacer" />
+        <button
+          onClick={() => actions.current.zoom(1 / 1.2)}
+          aria-label="Zoom out"
+        >
+          −
+        </button>
+        <span>{zoom}%</span>
+        <button onClick={() => actions.current.zoom(1.2)} aria-label="Zoom in">
+          +
+        </button>
+        <button onClick={() => actions.current.fit()} title="Fit drawing (0)">
+          Fit
+        </button>
+        <label>
+          <input
+            type="checkbox"
+            checked={showGrid}
+            onChange={(e) => setShowGrid(e.target.checked)}
+          />
+          Grid
+        </label>
+        <button aria-pressed={preview} onClick={() => setPreview(!preview)}>
+          {preview ? "Back to drawing" : "Preview"}
+        </button>
       </div>
-
-      <div className="asciiflow-canvas-container">
-        <canvas ref={canvasRef} />
+      {help && (
+        <div className="asciiflow-help">
+          <strong>Draw, then refine.</strong> Double-click to type. Select a box
+          or simple arrow to reveal resize handles. Shift changes connector
+          bends. Waypoints: click each bend, hover the endpoint, Enter to
+          finish; Escape cancels.
+          <br />
+          Space-drag or middle-drag to pan. Scroll to pan; pinch or
+          ⌘/Ctrl-scroll to zoom. +/− zoom, 0 fits the drawing. Arrow keys move
+          selections; Shift moves 10 cells; Alt duplicates while nudging.
+          ⌘/Ctrl+D duplicates. Paste, position, then click or Enter. Red preview
+          cells will be overwritten.
+          <br />
+          ⌘/Ctrl+S saves; ⌘/Ctrl+Shift+S saves and closes. Escape first cancels
+          the current action. Plain text is available in Preview for keyboard
+          and screen-reader access.
+        </div>
+      )}
+      {error && (
+        <div className="asciiflow-error" role="alert">
+          {error}
+          <button onClick={() => setError("")}>Dismiss</button>
+        </div>
+      )}
+      {confirm && (
+        <div
+          className="asciiflow-confirm"
+          role="alertdialog"
+          aria-label={confirm === "close" ? "Unsaved drawing" : "Clear drawing"}
+        >
+          <span>
+            {confirm === "close"
+              ? "Save your changes before closing?"
+              : "Clear the entire drawing? You can undo this."}
+          </span>
+          {confirm === "close" && (
+            <button
+              disabled={saving}
+              className="mod-cta"
+              onClick={() => {
+                setConfirm(null);
+                void save(true);
+              }}
+            >
+              Save & close
+            </button>
+          )}
+          <button
+            onClick={() => {
+              if (confirm === "close") {
+                onDraft?.(null);
+                live.current.dirty = false;
+                onCancel();
+              } else {
+                actions.current.cancel();
+                managerRef.current?.edit((ctx) => ctx.grid.clear());
+                setConfirm(null);
+              }
+            }}
+          >
+            {confirm === "close" ? "Discard changes" : "Clear drawing"}
+          </button>
+          <button
+            autoFocus
+            onClick={() => {
+              setConfirm(null);
+              if (live.current.tool === "text") textRef.current?.focus();
+              else canvasRef.current?.focus();
+            }}
+          >
+            Keep editing
+          </button>
+        </div>
+      )}
+      <div
+        className="asciiflow-canvas-container"
+        style={{ display: preview ? "none" : undefined }}
+      >
+        <canvas
+          ref={canvasRef}
+          tabIndex={0}
+          aria-label="ASCII drawing canvas. Press question mark for shortcuts."
+          data-tool={tool}
+        />
         <textarea
-          ref={hiddenInputRef}
-          style={{
-            position: "absolute",
-            left: "-9999px",
-            top: "-9999px",
-            width: "1px",
-            height: "1px",
-            opacity: 0,
-          }}
-          aria-hidden="true"
+          ref={textRef}
+          className="asciiflow-text-input"
+          aria-label="Diagram label input"
+          spellCheck={false}
         />
+        {!text && !pending && (
+          <div className="asciiflow-empty">
+            Drag to draw your first box.
+            <br />
+            <small>Double-click to add a label. Press ? for help.</small>
+          </div>
+        )}
       </div>
-
+      {preview && (
+        <div className="asciiflow-text-preview">
+          <label>
+            Diagram as it will appear in your note
+            <textarea
+              readOnly
+              value={text}
+              aria-label="Plain-text diagram"
+              spellCheck={false}
+            />
+          </label>
+        </div>
+      )}
       <div className="asciiflow-status">
-        Active tool: {activeTool} | Cursor: {cursor.row},{cursor.col} | Grid: {grid.getSize().rows}x{grid.getSize().cols}
+        <span>
+          {pending
+            ? "Preview: click or Enter to commit · Escape to cancel"
+            : toolList.find((t) => t.id === tool)?.hint}
+        </span>
+        {selectedShape && (
+          <span>
+            {selectedShape.kind === "box"
+              ? "Box: drag corner handles"
+              : "Arrow: drag endpoint handles"}
+          </span>
+        )}
+        <span className="asciiflow-feedback" role="status">
+          {message}
+        </span>
+        <span>
+          Row {cursor.row + 1}, col {cursor.col + 1}
+        </span>
       </div>
     </div>
   );

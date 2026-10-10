@@ -1,38 +1,32 @@
 import { Grid } from "../model/Grid";
-
-export class HistoryManager {
-  private past: Grid[] = [];
-  private future: Grid[] = [];
-  private maxSize: number;
-
-  constructor(maxSize = 100) {
-    this.maxSize = maxSize;
-  }
-
-  push(state: Grid) {
-    this.past.push(state.clone());
-    if (this.past.length > this.maxSize) {
-      this.past.shift();
-    }
+type Snapshot<T> = { grid: Grid; metadata: T };
+export class HistoryManager<T = undefined> {
+  private past: Snapshot<T>[] = [];
+  private future: Snapshot<T>[] = [];
+  constructor(private maxSize = 100) {}
+  push(grid: Grid, metadata: T) {
+    this.past.push({ grid: grid.clone(), metadata });
+    if (this.past.length > this.maxSize) this.past.shift();
     this.future = [];
   }
-
-  undo(current: Grid): Grid | null {
-    if (this.past.length === 0) return null;
-    const prev = this.past.pop();
-    if (!prev) return null;
-    this.future.push(current.clone());
-    return prev;
+  undo(grid: Grid, metadata: T): Snapshot<T> | null {
+    const previous = this.past.pop();
+    if (!previous) return null;
+    this.future.push({ grid: grid.clone(), metadata });
+    return previous;
   }
-
-  redo(current: Grid): Grid | null {
-    if (this.future.length === 0) return null;
+  redo(grid: Grid, metadata: T): Snapshot<T> | null {
     const next = this.future.pop();
     if (!next) return null;
-    this.past.push(current.clone());
+    this.past.push({ grid: grid.clone(), metadata });
     return next;
   }
-
+  get canUndo() {
+    return this.past.length > 0;
+  }
+  get canRedo() {
+    return this.future.length > 0;
+  }
   clear() {
     this.past = [];
     this.future = [];

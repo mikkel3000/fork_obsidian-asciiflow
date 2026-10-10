@@ -1,136 +1,106 @@
-# Obsidian ASCIIFlow
+# Obsidian ASCIIFlow — local fork
 
-[中文文档](README.zh.md)
+Draw and revise text diagrams inside Obsidian. Diagrams remain ordinary `asciiflow` code blocks in your Markdown notes.
 
-An [Obsidian](https://obsidian.md) plugin that embeds an ASCIIFlow-style ASCII art editor directly into Markdown code blocks. Draw boxes, lines, arrows, freehand shapes, and text — with full undo/redo history.
+## Start a drawing
 
-## Features
+Run **ASCIIFlow: Insert ASCII diagram** from the command palette. It inserts a block at the cursor and opens the editor. To edit an existing diagram:
 
-- 🖊️ **6 Drawing Tools** — Select, Box, Line, Arrow, Text, Freeform
-- 📦 **Box Drawing** — Rectangles using Unicode box-drawing characters (`┌ ┐ └ ┘ ─ │`)
-- 📏 **Lines & Arrows** — Straight lines, L-shaped paths, and arrow connectors
-- ⌨️ **Text Input** — Direct typing with IME composition and fullwidth character (CJK) support
-- ✋ **Freeform Drawing** — Click or drag to place custom characters
-- ✂️ **Select & Edit** — Rectangular selection with copy/cut/paste and drag-to-move
-- ↩️ **Undo/Redo** — Up to 100 history states (`Ctrl+Z` / `Ctrl+Shift+Z`)
-- 🎨 **Theme Aware** — Automatically adapts to Obsidian's light and dark themes
-- 🔍 **Zoom & Pan** — Canvas zoom and pan support
+- In Reading view, click **Edit drawing** for a modal or **Open in pane** to keep the note visible alongside it.
+- In the note editor, put the cursor inside a diagram and run **ASCIIFlow: Edit ASCII diagram at cursor**.
 
-## Usage
+You can also write a block manually:
 
-Use an `asciiflow` code block in any Obsidian Markdown file:
-
-<pre>
+````markdown
 ```asciiflow
-┌──────────┐
-│  Hello   │
-│  World   │
-└──────────┘
+┌────────────┐
+│ Start here │
+└────────────┘
 ```
-</pre>
+````
 
-- **Preview mode**: The code block renders as ASCII art with an "Edit" button
-- **Edit mode**: Opens a full-featured visual editor in a modal (90vw × 90vh). Changes are saved back to the code block automatically
+## Drawing controls
 
-## Tools
+| Action                                      | How                                                                                                                                   |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Select, Box, Line, Arrow, Text, Draw, Erase | Toolbar or V, B, L, A, T, F, E when not typing a label                                                                                |
+| Place accurately                            | Hover highlights the target cell; Draw previews its character                                                                         |
+| Connect shapes                              | Lines merge into corners, tees and crossings automatically                                                                            |
+| Change a connector bend                     | Hold Shift while dragging                                                                                                             |
+| Multiple connector bends                    | Enable **Waypoints**, click successive points, hover the final endpoint and press Enter; Escape cancels                               |
+| Label a diagram                             | Double-click, or select Text and click; Enter keeps the starting column                                                               |
+| Center a label                              | Select a box including its border, then **Center label**                                                                              |
+| Move a selection                            | Drag inside it, or use arrow keys; Shift nudges ten cells                                                                             |
+| Duplicate                                   | Cmd/Ctrl-drag, or Cmd/Ctrl+D / **Duplicate** then position and click/Enter. Escape cancels; Alt+arrow keys copy while nudging         |
+| Paste                                       | Cmd/Ctrl+V, move the floating preview, then click or Enter; Escape cancels. Red cells indicate existing content that will be replaced |
+| Resize a box                                | Select its exact bounds; drag a corner handle. Resizing refuses to crop labels                                                        |
+| Move arrow endpoints                        | Select a simple arrow's exact bounds; drag an endpoint handle                                                                         |
+| Erase                                       | Drag with Erase; select a 1-, 3-, or 5-cell brush                                                                                     |
+| Pick a character                            | Alt-click existing text with Draw selected                                                                                            |
+| Pan                                         | Scroll, Space-drag on the canvas, or middle-button drag                                                                               |
+| Zoom                                        | Pinch, Cmd/Ctrl-scroll, or +/− controls                                                                                               |
+| Fit drawing                                 | **Fit** or 0                                                                                                                          |
+| View plain text                             | **Preview** shows selectable text with the note's monospace spacing                                                                   |
+| Help                                        | **Help** or ?                                                                                                                         |
 
-| Tool | Interaction | Description |
-|------|-------------|-------------|
-| **Select** | Click & drag | Select a region, then copy/cut/paste/delete or drag to move |
-| **Box** | Click & drag | Draw a rectangle from one corner to the opposite |
-| **Line** | Click & drag | Draw horizontal, vertical, or L-shaped lines |
-| **Arrow** | Click & drag | Like the Line tool, with an arrowhead at the end (`► ◄ ▼ ▲`) |
-| **Text** | Click to place cursor | Type freely at the cursor position |
-| **Freeform** | Click & drag | Paint with `*` characters |
+The grid grows to the right and downward when you draw. Freehand and eraser strokes interpolate between pointer events. Undo groups nearby typing into a single step and restores the label cursor. Selection paste replaces the whole rectangle, including spaces.
 
-### Keyboard Shortcuts
+## Save and recover
 
-| Shortcut | Action |
-|----------|--------|
-| `Ctrl+Z` | Undo |
-| `Ctrl+Shift+Z` | Redo |
-| `Ctrl+C` | Copy selection |
-| `Ctrl+X` | Cut selection |
-| `Ctrl+V` | Paste |
-| `Escape` | Exit text input mode |
+- **Save** / Cmd/Ctrl+S saves without closing. **Save & close** / Cmd/Ctrl+Shift+S does both.
+- Closing a modal with changes offers Save, Discard, or Keep editing.
+- Unsaved drafts are stored in this plugin's `data.json`, with a short debounce and a flush on editor teardown. Reopening the unchanged diagram restores its draft.
+- Closing a pane using Obsidian's own tab-close button keeps its draft; it does not display the modal's confirmation dialog.
+- **ASCIIFlow: Recover latest drawing draft** creates a separate recovery note. Use this if the original diagram was moved, removed, or changed.
+- Saving merges changes to an unchanged, uniquely identifiable diagram while preserving edits elsewhere in the note. Conflicting or ambiguous diagrams are rejected, with your drawing kept available.
+- **Copy drawing** copies the entire diagram. **Export .txt** downloads a standalone text file. **Clear** asks first and can be undone.
 
-## Installation
+## Use your local fork
 
-### From Obsidian Community Plugins (Recommended)
-
-1. Open Obsidian Settings → Community Plugins
-2. Disable **Safe Mode** if enabled
-3. Click **Browse** and search for **ASCIIFlow**
-4. Click **Install**, then **Enable**
-
-### Manual Installation
-
-1. Download `main.js`, `manifest.json`, and `styles.css` from the latest [Release](../../releases)
-2. Create the folder `.obsidian/plugins/asciiflow/` in your Obsidian vault
-3. Copy the downloaded files into that folder
-4. Enable **ASCIIFlow** in Obsidian Settings → Community Plugins
-
-### Build from Source
+Requires Node.js 20 or newer:
 
 ```bash
-# Clone the repository
-git clone https://github.com/xvusrmqj/obsidian-asciiflow.git
-cd obsidian-asciiflow
-
-# Install dependencies
-npm install
-
-# Development (watch mode)
-npm run dev
-
-# Production build
+npm ci
+npm test
 npm run build
 ```
 
+Set your vault path, then copy the build:
+
+```bash
+VAULT_PATH="/absolute/path/to/your/vault"
+mkdir -p "$VAULT_PATH/.obsidian/plugins/asciiflow"
+cp main.js manifest.json styles.css "$VAULT_PATH/.obsidian/plugins/asciiflow/"
+```
+
+Disable an existing ASCIIFlow installation before copying. This fork uses the same plugin ID, `asciiflow`. Restart Obsidian and enable ASCIIFlow under **Settings → Community plugins**. If your vault uses a custom configuration folder, substitute it for `.obsidian`.
+
+After changes, rebuild, copy the files again, and toggle the plugin off/on. `npm run dev` watches and rebuilds source files in the repository; it does not install or reload the plugin automatically. Keep the vault's `data.json` when updating so recovery drafts survive.
+
+## Development and validation
+
+- `npm test`: model and DOM interaction regression tests, including note merging, conflicts, undo/redo, drawing tools, resize handles, labels, clipboard, waypoints, zoom mapping, drafts, and close/save behavior.
+- `npm run typecheck`: TypeScript checking.
+- `npm run build`: typecheck and bundle the plugin.
+- `npm run format`: format source and test files.
+- `npx playwright install chromium`, then `npm run test:browser`: browser interaction tests against the standalone editor harness.
+
+The DOM tests mock canvas rendering and Obsidian is not present in that harness. Browser tests require a separate browser download. Validate the installed plugin in Obsidian before relying on it for important diagrams.
+
+### Current boundaries
+
+- Resize handles recognize rectangular boxes and simple, unbranched arrows from their characters. Complex drawings remain editable through rectangular selection; no hidden shape metadata is stored. Attached connectors are not automatically rerouted when a box moves or resizes.
+- Keep blocks at the top level of notes; up to three spaces of indentation are supported. Nested list and blockquote blocks are rejected by the save validator.
+- Reopening a workspace pane after restarting Obsidian shows an instruction to reopen a diagram; recovery drafts persist separately.
+- Full desktop, mobile, and pop-out-window behavior needs an Obsidian smoke test. Keyboard shortcuts are designed for desktop; touch supports basic drawing and erasing.
+
 ## Architecture
 
-```
-src/
-├── main.tsx              # Plugin entry point, registers code block processor
-├── ui/
-│   └── AsciiFlowApp.tsx  # React main component (toolbar + canvas)
-├── tools/
-│   ├── ITool.ts          # Tool interface
-│   ├── ToolManager.ts    # Tool lifecycle & event dispatch
-│   ├── ToolContext.ts    # Tool context (grid access, render trigger)
-│   ├── SelectTool.ts     # Selection tool
-│   ├── BoxTool.ts        # Box drawing tool
-│   ├── LineTool.ts       # Line drawing tool
-│   ├── ArrowTool.ts      # Arrow drawing tool
-│   ├── TextTool.ts       # Text input tool
-│   ├── FreeformTool.ts   # Freeform drawing tool
-│   └── HistoryManager.ts # Undo/redo history (100 states)
-├── model/
-│   ├── Grid.ts           # Sparse grid data model (Map-based)
-│   ├── Serializer.ts     # Text ↔ Grid serialization
-│   └── CharWidth.ts      # Fullwidth/halfwidth character detection
-├── renderer/
-│   └── CanvasRenderer.ts # Canvas 2D renderer
-└── input/
-    ├── InputHandler.ts   # Pointer event handling
-    └── CoordinateMapper.ts # Screen → Grid coordinate mapping
-```
+- `src/main.tsx`: Obsidian commands, modal/pane lifecycle, draft persistence, note saves.
+- `src/ui/AsciiFlowApp.tsx`: editor controls, keyboard/clipboard handling, save and recovery UI.
+- `src/model/`: sparse grid, text serialization, line joining, shape recognition and note merging.
+- `src/tools/`: drawing tools, selection, labels and undo history.
+- `src/input/`: pointer, pan/zoom and coordinate mapping.
+- `src/renderer/`: canvas drawing, hover, selection and overwrite previews.
 
-**Layered design**: UI → Tools → Renderer → Model → Input
-
-- **UI Layer**: React component manages toolbar state and canvas interactions
-- **Tools Layer**: Each tool mutates the grid via `ToolContext` and calls `render()` to refresh
-- **Renderer Layer**: Canvas 2D API renders grid cells, selections, cursor, and overlays
-- **Model Layer**: Sparse grid (`Map<string, string>`), default 40×120, with fullwidth character support
-- **Input Layer**: Converts screen coordinates to grid coordinates, handles zoom and pan
-
-## Tech Stack
-
-- **TypeScript** (strict mode) + **React 18**
-- **Canvas 2D API** for rendering
-- **esbuild** for bundling
-- **Obsidian API** ≥ 1.5.0
-
-## License
-
-MIT
+MIT license. Based on [xvusrmqj/obsidian-asciiflow](https://github.com/xvusrmqj/obsidian-asciiflow).

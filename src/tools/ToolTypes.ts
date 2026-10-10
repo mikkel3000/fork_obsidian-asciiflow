@@ -1,4 +1,5 @@
-export type ToolId = "box" | "line" | "arrow" | "freeform" | "text" | "select";
+export type ToolId =
+  "box" | "line" | "arrow" | "freeform" | "text" | "select" | "eraser";
 
 export type ToolPointerState = {
   startRow: number;
@@ -7,4 +8,5 @@ export type ToolPointerState = {
   col: number;
   isDragging: boolean;
   ctrlKey: boolean;
+  shiftKey?: boolean;
 };

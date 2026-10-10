@@ -9,7 +9,7 @@ const fullwidthRanges: Array<[number, number]> = [
   [0xfe30, 0xfe6f],
   [0xff00, 0xff60],
   [0xffe0, 0xffe6],
-  [0x20000, 0x3fffd]
+  [0x20000, 0x3fffd],
 ];
 
 export function charWidth(ch: string): number {

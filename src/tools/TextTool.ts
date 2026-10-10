@@ -2,12 +2,12 @@ import { ITool } from "./ITool";
 import { ToolContext } from "./ToolContext";
 import { ToolPointerState } from "./ToolTypes";
 import { charWidth } from "../model/CharWidth";
-import { gridFromText } from "../model/Serializer";
 
 export class TextTool implements ITool {
   id = "text";
 
   /** Current cursor position (null = not active) */
+  private lineStart = 0;
   private cursorRow: number | null = null;
   private cursorCol: number | null = null;
 
@@ -23,6 +23,20 @@ export class TextTool implements ITool {
     return { row: this.cursorRow, col: this.cursorCol };
   }
 
+  getState() {
+    return {
+      row: this.cursorRow,
+      col: this.cursorCol,
+      lineStart: this.lineStart,
+    };
+  }
+  restoreState(state: ReturnType<TextTool["getState"]>) {
+    this.cursorRow = state.row;
+    this.cursorCol = state.col;
+    this.lineStart = state.lineStart;
+    this.onCursorChange?.(state.row, state.col);
+  }
+
   isActive(): boolean {
     return this.cursorRow !== null;
   }
@@ -31,6 +45,7 @@ export class TextTool implements ITool {
     // Place cursor at click position
     this.cursorRow = state.row;
     this.cursorCol = state.col;
+    this.lineStart = state.col;
     this.onCursorChange?.(this.cursorRow, this.cursorCol);
     ctx.render();
   }
@@ -90,7 +105,7 @@ export class TextTool implements ITool {
         return true;
       case "Enter":
         this.cursorRow += 1;
-        this.cursorCol = 0;
+        this.cursorCol = this.lineStart;
         this.onCursorChange?.(this.cursorRow, this.cursorCol);
         ctx.render();
         return true;
@@ -144,23 +159,20 @@ export class TextTool implements ITool {
   /** Paste external text at the current cursor position */
   pasteText(text: string, ctx: ToolContext) {
     if (this.cursorRow === null || this.cursorCol === null) return;
-    const externalGrid = gridFromText(text, 1, 1);
-    const startRow = this.cursorRow;
-    const startCol = this.cursorCol;
-    let maxEndCol = startCol;
-    externalGrid.forEachCell(({ row, col, value }) => {
-      ctx.setCell(startRow + row, startCol + col, value);
-      maxEndCol = Math.max(maxEndCol, startCol + col + 1);
-    });
-    // Move cursor to end of first line of pasted content
+    const startRow = this.cursorRow,
+      startCol = this.cursorCol;
     const lines = text.replace(/\r\n/g, "\n").split("\n");
-    if (lines.length === 1) {
-      this.cursorRow = startRow;
-      this.cursorCol = startCol + lines[0].length;
-    } else {
-      this.cursorRow = startRow + lines.length - 1;
-      this.cursorCol = lines[lines.length - 1].length;
+    for (let r = 0; r < lines.length; r++) {
+      let col = startCol;
+      for (const ch of lines[r]) {
+        ctx.setCell(startRow + r, col, ch);
+        if (charWidth(ch) === 2) ctx.setCell(startRow + r, col + 1, "");
+        col += charWidth(ch);
+      }
+      this.cursorCol = col;
     }
+    this.cursorRow = startRow + lines.length - 1;
+    this.lineStart = startCol;
     this.onCursorChange?.(this.cursorRow, this.cursorCol);
     ctx.render();
   }
