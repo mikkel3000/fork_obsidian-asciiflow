@@ -1,0 +1,21 @@
+name: Versioned releases
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    types: [closed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  versionedcommits:
+    permissions:
+      contents: write
+      pull-requests: write
+      statuses: write
+    # Pin the reusable workflow implementation used by the other forks.
+    uses: mikkel3000/versionedcommits/.github/workflows/versionedcommits.yml@eb9ac58a58fb9ef7ed92802cbdcc244106e3e8b0

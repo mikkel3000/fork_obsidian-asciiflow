@@ -5,12 +5,14 @@ import {
   Modal,
   Notice,
   Plugin,
+  Scope,
   TFile,
   WorkspaceLeaf,
 } from "obsidian";
 import React from "react";
 import { createRoot, Root } from "react-dom/client";
 import { mergeCodeBlock, replaceCodeBlock } from "./model/CodeBlock";
+import { drawingPreviewText } from "./model/Serializer";
 import { AsciiFlowApp, EditorHandle } from "./ui/AsciiFlowApp";
 
 const VIEW_TYPE = "asciiflow-editor";
@@ -33,6 +35,12 @@ class AsciiFlowModal extends Modal {
     private session: Session,
   ) {
     super(plugin.app);
+    // Replace the default modal scope so Escape can never invoke close().
+    this.scope = new Scope(plugin.app.scope);
+    this.scope.register([], "Escape", () => {
+      this.editor?.resetTool();
+      return false;
+    });
   }
   onOpen() {
     this.modalEl.addClass("asciiflow-modal");
@@ -390,6 +398,9 @@ export default class AsciiFlowPlugin extends Plugin {
     }
     container
       .createEl("pre")
-      .setText(source || "Empty diagram — click Edit drawing to start.");
+      .setText(
+        drawingPreviewText(source) ||
+          "Empty diagram — click Edit drawing to start.",
+      );
   }
 }

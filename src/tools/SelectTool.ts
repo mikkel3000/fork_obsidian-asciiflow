@@ -6,6 +6,13 @@ import {
   shapeHandles,
   samePoint,
 } from "../model/Drawing";
+import {
+  enclosingBox,
+  smartRegion,
+  textRegion,
+  isBorder,
+  SelectedCell,
+} from "../model/SmartSelection";
 import { charWidth } from "../model/CharWidth";
 import { Grid } from "../model/Grid";
 import { gridFromText, gridToText } from "../model/Serializer";
@@ -18,6 +25,7 @@ export type Selection = {
   startCol: number;
   endRow: number;
   endCol: number;
+  cells?: SelectedCell[];
 };
 
 export type DragPreview = {
@@ -26,10 +34,16 @@ export type DragPreview = {
   targetCol: number;
   sourceSelection: Selection;
   copyMode: boolean;
+  opaque?: boolean;
 };
 
 export class SelectTool implements ITool {
   id = "select";
+  private smart = true;
+  private selecting = false;
+  setSmart(value: boolean) {
+    this.smart = value;
+  }
   private resizing: { shape: Shape; handle: number; base: Grid } | null = null;
   private selection: Selection | null = null;
   private renderHighlight: ((sel: Selection) => void) | null = null;
@@ -62,6 +76,7 @@ export class SelectTool implements ITool {
   }
 
   onPointerDown(state: ToolPointerState, ctx: ToolContext) {
+    this.selecting = false;
     const shape = this.selection
       ? recognizeShape(ctx.grid, this.normalized())
       : null;
@@ -96,6 +111,7 @@ export class SelectTool implements ITool {
     this.dragClipboard = null;
     this.dragCopyMode = false;
 
+    this.selecting = true;
     this.selection = {
       startRow: state.row,
       startCol: state.col,
@@ -133,6 +149,10 @@ export class SelectTool implements ITool {
       this.selection.startCol = startCol;
       this.selection.endRow = startRow + size.rows - 1;
       this.selection.endCol = startCol + size.cols - 1;
+      this.selection.cells = this.dragSourceSelection?.cells?.map((p) => ({
+        row: p.row - this.dragSourceSelection!.startRow + startRow,
+        col: p.col - this.dragSourceSelection!.startCol + startCol,
+      }));
       // Show drag preview via renderer overlay (no grid mutation)
       this.showDragPreview();
       this.drawHighlight();
@@ -171,10 +191,30 @@ export class SelectTool implements ITool {
         return;
       }
       const target = this.normalized();
+      const source = this.dragSourceSelection;
+      if (
+        this.dragCopyMode &&
+        target.startRow <= source.endRow &&
+        target.endRow >= source.startRow &&
+        target.startCol <= source.endCol &&
+        target.endCol >= source.startCol
+      ) {
+        this.selection = { ...source };
+        this.resetDragState();
+        this.drawHighlight();
+        ctx.render();
+        return;
+      }
       if (!this.dragCopyMode) {
         this.clearRegion(ctx, this.dragSourceSelection);
       }
-      this.pasteGrid(ctx, this.dragClipboard, target.startRow, target.startCol);
+      this.pasteGrid(
+        ctx,
+        this.dragClipboard,
+        target.startRow,
+        target.startCol,
+        !this.dragSourceSelection.cells,
+      );
       this.resetDragState();
       this.drawHighlight();
       ctx.render();
@@ -183,6 +223,14 @@ export class SelectTool implements ITool {
 
     this.selection.endRow = state.row;
     this.selection.endCol = state.col;
+    if (this.smart && this.selecting) {
+      const clicked =
+        state.row === state.startRow && state.col === state.startCol;
+      this.selection = clicked
+        ? (smartRegion(ctx.grid, state) ?? this.selection)
+        : textRegion(ctx.grid, this.normalized());
+    }
+    this.selecting = false;
     this.drawHighlight();
     ctx.render();
   }
@@ -233,6 +281,7 @@ export class SelectTool implements ITool {
       startCol: Math.min(s.startCol, s.endCol),
       endRow: Math.max(s.startRow, s.endRow),
       endCol: Math.max(s.startCol, s.endCol),
+      ...(s.cells ? { cells: s.cells } : {}),
     };
   }
 
@@ -264,6 +313,7 @@ export class SelectTool implements ITool {
       targetCol: target.startCol,
       sourceSelection: this.dragSourceSelection,
       copyMode: this.dragCopyMode,
+      opaque: !this.dragSourceSelection.cells,
     });
   }
 
@@ -309,9 +359,17 @@ export class SelectTool implements ITool {
     const rows = endRow - startRow + 1;
     const cols = endCol - startCol + 1;
     const grid = new Grid(rows, cols);
+    const included = sel.cells
+      ? new Set(sel.cells.map((p) => Grid.key(p.row, p.col)))
+      : null;
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
-        const val = ctx.getCell(startRow + r, startCol + c);
+        if (included && !included.has(Grid.key(startRow + r, startCol + c)))
+          continue;
+        const override = sel.cells?.find(
+          (p) => p.row === startRow + r && p.col === startCol + c,
+        );
+        const val = override?.value ?? ctx.getCell(startRow + r, startCol + c);
         if (val) grid.setCell(r, c, val);
       }
     }
@@ -320,6 +378,10 @@ export class SelectTool implements ITool {
 
   private clearRegion(ctx: ToolContext, sel: Selection) {
     const { startRow, startCol, endRow, endCol } = sel;
+    if (sel.cells) {
+      for (const p of sel.cells) ctx.setCell(p.row, p.col, p.restore ?? "");
+      return;
+    }
     for (let r = startRow; r <= endRow; r++) {
       for (let c = startCol; c <= endCol; c++) {
         ctx.setCell(r, c, "");
@@ -332,11 +394,13 @@ export class SelectTool implements ITool {
     grid: Grid,
     targetRow: number,
     targetCol: number,
+    opaque = true,
   ) {
     const { rows, cols } = grid.getSize();
     for (let r = 0; r < rows; r++)
       for (let c = 0; c < cols; c++)
-        ctx.setCell(targetRow + r, targetCol + c, grid.getCell(r, c));
+        if (opaque || grid.getCell(r, c))
+          ctx.setCell(targetRow + r, targetCol + c, grid.getCell(r, c));
   }
 
   setSelection(selection: Selection) {
@@ -344,10 +408,22 @@ export class SelectTool implements ITool {
     this.drawHighlight();
   }
 
-  placeGrid(grid: Grid, row: number, col: number, ctx: ToolContext) {
-    this.pasteGrid(ctx, grid, row, col);
+  placeGrid(
+    grid: Grid,
+    row: number,
+    col: number,
+    ctx: ToolContext,
+    opaque = true,
+  ) {
+    this.pasteGrid(ctx, grid, row, col, opaque);
     const { rows, cols } = grid.getSize();
+    const cells: Point[] = [];
+    if (!opaque)
+      grid.forEachCell((p) =>
+        cells.push({ row: row + p.row, col: col + p.col }),
+      );
     this.setSelection({
+      ...(opaque ? {} : { cells }),
       startRow: row,
       startCol: col,
       endRow: row + rows - 1,
@@ -360,37 +436,111 @@ export class SelectTool implements ITool {
     if (!this.selection) return;
     const old = this.normalized(),
       captured = this.captureSelection(ctx, old);
-    const row = Math.max(0, old.startRow + dr),
+    let row = Math.max(0, old.startRow + dr),
       col = Math.max(0, old.startCol + dc);
+    if (copy) {
+      const size = captured.getSize();
+      if (
+        row <= old.endRow &&
+        row + size.rows - 1 >= old.startRow &&
+        col <= old.endCol &&
+        col + size.cols - 1 >= old.startCol
+      ) {
+        if (dc)
+          col =
+            dc < 0 && old.startCol > size.cols
+              ? old.startCol - size.cols - 1
+              : old.endCol + 2;
+        else
+          row =
+            dr < 0 && old.startRow > size.rows
+              ? old.startRow - size.rows - 1
+              : old.endRow + 2;
+      }
+    }
     if (!copy) this.clearRegion(ctx, old);
-    this.placeGrid(captured, row, col, ctx);
+    this.placeGrid(captured, row, col, ctx, !old.cells);
   }
 
   centerLabel(ctx: ToolContext) {
     if (!this.selection) return;
-    const rect = this.normalized();
-    if (recognizeShape(ctx.grid, rect)?.kind !== "box") return;
-    for (let row = rect.startRow + 1; row < rect.endRow; row++) {
-      let text = "";
-      for (let col = rect.startCol + 1; col < rect.endCol; col++) {
-        const ch = ctx.getCell(row, col) || " ";
-        text += ch;
-        col += Math.max(1, charWidth(ch)) - 1;
-      }
-      text = text.trim();
-      let width = 0;
-      for (const ch of text) width += charWidth(ch);
-      for (let col = rect.startCol + 1; col < rect.endCol; col++)
-        ctx.setCell(row, col, "");
-      let col =
+    const selected = this.normalized();
+    const rect =
+      recognizeShape(ctx.grid, selected)?.kind === "box"
+        ? selected
+        : enclosingBox(ctx.grid, {
+            row: selected.startRow,
+            col: selected.startCol,
+          });
+    if (!rect) return;
+    const source: { row: number; col: number; value: string }[] = [];
+    const wholeBox = recognizeShape(ctx.grid, selected)?.kind === "box";
+    const included = selected.cells
+      ? new Set(selected.cells.map((p) => Grid.key(p.row, p.col)))
+      : null;
+    ctx.grid.forEachCell((p) => {
+      if (
+        p.row <= rect.startRow ||
+        p.row >= rect.endRow ||
+        p.col <= rect.startCol ||
+        p.col >= rect.endCol ||
+        isBorder(p.value)
+      )
+        return;
+      if (
+        wholeBox ||
+        (included
+          ? included.has(Grid.key(p.row, p.col))
+          : p.row >= selected.startRow &&
+            p.row <= selected.endRow &&
+            p.col >= selected.startCol &&
+            p.col <= selected.endCol)
+      )
+        source.push(p);
+    });
+    if (!source.length) return;
+    const top = Math.min(...source.map((p) => p.row)),
+      bottom = Math.max(...source.map((p) => p.row));
+    const targetTop =
+      rect.startRow +
+      1 +
+      Math.floor((rect.endRow - rect.startRow - 1 - (bottom - top + 1)) / 2);
+    const target: typeof source = [];
+    for (let row = top; row <= bottom; row++) {
+      const cells = source.filter((p) => p.row === row);
+      if (!cells.length) continue;
+      const left = Math.min(...cells.map((p) => p.col));
+      const right = Math.max(
+        ...cells.map((p) => p.col + Math.max(1, charWidth(p.value))),
+      );
+      const targetLeft =
         rect.startCol +
         1 +
-        Math.floor((rect.endCol - rect.startCol - 1 - width) / 2);
-      for (const ch of text) {
-        ctx.setCell(row, col, ch);
-        col += charWidth(ch);
-      }
+        Math.floor((rect.endCol - rect.startCol - 1 - (right - left)) / 2);
+      for (const p of cells)
+        target.push({
+          row: targetTop + row - top,
+          col: targetLeft + p.col - left,
+          value: p.value,
+        });
     }
+    const sourceKeys = new Set(source.map((p) => Grid.key(p.row, p.col)));
+    if (
+      target.some(
+        (p) =>
+          ctx.getCell(p.row, p.col) && !sourceKeys.has(Grid.key(p.row, p.col)),
+      )
+    )
+      return;
+    for (const p of source) ctx.setCell(p.row, p.col, "");
+    for (const p of target) ctx.setCell(p.row, p.col, p.value);
+    this.setSelection({
+      startRow: Math.min(...target.map((p) => p.row)),
+      startCol: Math.min(...target.map((p) => p.col)),
+      endRow: Math.max(...target.map((p) => p.row)),
+      endCol: Math.max(...target.map((p) => p.col)),
+      cells: target.map(({ row, col }) => ({ row, col })),
+    });
     ctx.render();
   }
 }

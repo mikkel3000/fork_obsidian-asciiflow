@@ -109,20 +109,18 @@ export function drawPath(
   if (arrow && points.length > 1) {
     const tip = points[points.length - 1],
       previous = points[points.length - 2];
-    // Preserve a junction when the arrow terminates on a box edge.
-    const mask = strokes[grid.getCell(tip.row, tip.col)] ?? 0;
-    if (![7, 11, 13, 14, 15].includes(mask))
-      grid.setCell(
-        tip.row,
-        tip.col,
-        tip.row > previous.row
-          ? "▼"
-          : tip.row < previous.row
-            ? "▲"
-            : tip.col > previous.col
-              ? "►"
-              : "◄",
-      );
+    // A connector endpoint must always retain its direction, including on borders.
+    grid.setCell(
+      tip.row,
+      tip.col,
+      tip.row > previous.row
+        ? "▼"
+        : tip.row < previous.row
+          ? "▲"
+          : tip.col > previous.col
+            ? "►"
+            : "◄",
+    );
   }
 }
 export function boxPoints(r: Rect): Point[] {
@@ -147,7 +145,8 @@ export type Shape =
 export function recognizeShape(grid: Grid, rect: Rect): Shape | null {
   const { startRow: t, startCol: l, endRow: b, endCol: r } = rect;
   const has = (row: number, col: number, mask: number) =>
-    ((strokes[grid.getCell(row, col)] ?? 0) & mask) === mask;
+    ((strokes[grid.getCell(row, col)] ?? 0) & mask) === mask ||
+    ("►◄▼▲".includes(grid.getCell(row, col)) && grid.getCell(row, col) !== "");
   if (
     b - t >= 2 &&
     r - l >= 2 &&

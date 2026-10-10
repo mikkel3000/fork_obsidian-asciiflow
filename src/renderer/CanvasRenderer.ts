@@ -1,6 +1,6 @@
 import { Point } from "../model/Drawing";
 import { Grid } from "../model/Grid";
-import { DragPreview } from "../tools/SelectTool";
+import { DragPreview, Selection } from "../tools/SelectTool";
 
 export type CanvasTheme = {
   background: string;
@@ -30,12 +30,7 @@ export class CanvasRenderer {
   private panX = 0;
   private panY = 0;
   private zoom = 1;
-  private selection: {
-    startRow: number;
-    startCol: number;
-    endRow: number;
-    endCol: number;
-  } | null = null;
+  private selection: Selection | null = null;
   private textCursor: { row: number; col: number } | null = null;
   private dragPreview: DragPreview | null = null;
 
@@ -216,7 +211,15 @@ export class CanvasRenderer {
       const w = (endCol - startCol + 1) * cellWidth;
       const h = (endRow - startRow + 1) * cellHeight;
       ctx.fillStyle = "rgba(100, 150, 255, 0.2)";
-      ctx.fillRect(x, y, w, h);
+      if (this.selection.cells) {
+        for (const p of this.selection.cells)
+          ctx.fillRect(
+            p.col * cellWidth,
+            p.row * cellHeight,
+            cellWidth,
+            cellHeight,
+          );
+      } else ctx.fillRect(x, y, w, h);
       ctx.strokeStyle = "rgba(100, 150, 255, 0.7)";
       ctx.lineWidth = 1.5;
       ctx.strokeRect(x, y, w, h);
@@ -246,6 +249,8 @@ export class CanvasRenderer {
       const previewSize = previewGrid.getSize();
       for (let r = 0; r < previewSize.rows; r++)
         for (let c = 0; c < previewSize.cols; c++) {
+          if (this.dragPreview.opaque === false && !previewGrid.getCell(r, c))
+            continue;
           const old = this.grid.getCell(targetRow + r, targetCol + c);
           ctx.fillStyle = old ? "rgba(255,90,90,0.35)" : this.theme.background;
           ctx.fillRect(
@@ -316,14 +321,7 @@ export class CanvasRenderer {
     this.cleanPreview = value;
   }
 
-  setSelection(
-    sel: {
-      startRow: number;
-      startCol: number;
-      endRow: number;
-      endCol: number;
-    } | null,
-  ) {
+  setSelection(sel: Selection | null) {
     this.selection = sel;
   }
 

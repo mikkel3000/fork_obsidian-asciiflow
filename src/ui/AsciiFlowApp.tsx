@@ -12,9 +12,15 @@ import { CanvasRenderer } from "../renderer/CanvasRenderer";
 import { InputHandler } from "../input/InputHandler";
 import { ToolManager } from "../tools/ToolManager";
 import { ToolId, ToolPointerState } from "../tools/ToolTypes";
+import { enclosingBox } from "../model/SmartSelection";
+import { FigureCatalog } from "./FigureCatalog";
 import { Grid } from "../model/Grid";
 
-export type EditorHandle = { requestClose: () => void; getText: () => string };
+export type EditorHandle = {
+  requestClose: () => void;
+  resetTool: () => void;
+  getText: () => string;
+};
 export type AsciiFlowAppProps = {
   initialText: string;
   draft?: string;
@@ -27,7 +33,7 @@ const toolList: { id: ToolId; label: string; key: string; hint: string }[] = [
   {
     id: "select",
     label: "Select",
-    key: "V",
+    key: "S",
     hint: "Drag to select · Drag inside to move · ⌘/Ctrl-drag to duplicate · Arrow keys nudge · Shift = 10 cells",
   },
   {
@@ -80,6 +86,7 @@ export function AsciiFlowApp({
     gridToText(gridFromText(initialText)),
   );
   const [revision, setRevision] = useState(0);
+  const [smartSelect, setSmartSelect] = useState(true);
   const [tool, setTool] = useState<ToolId>("box");
   const [char, setChar] = useState("*");
   const [brush, setBrush] = useState(1);
@@ -88,6 +95,7 @@ export function AsciiFlowApp({
   const [showGrid, setShowGrid] = useState(true);
   const [preview, setPreview] = useState(false);
   const [help, setHelp] = useState(false);
+  const [catalog, setCatalog] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState(
@@ -108,6 +116,7 @@ export function AsciiFlowApp({
     zoom: (_factor: number) => {},
     paste: (_text: string) => {},
     selectAll: () => {},
+    resetTool: () => {},
     duplicate: () => {},
   });
   const text = gridToText(grid),
@@ -172,6 +181,7 @@ export function AsciiFlowApp({
   useEffect(() => {
     onReady?.({
       requestClose: () => callbacks.current.requestClose(),
+      resetTool: () => actions.current.resetTool(),
       getText: () => gridToText(grid),
     });
     return () => {
@@ -216,6 +226,8 @@ export function AsciiFlowApp({
     let hover: Point = { row: 0, col: 0 },
       composing = false,
       gesture = false;
+    let duplicateSource: ReturnType<typeof selection.normalized> | null = null;
+    let pasteOpaque = true;
     let paste: Grid | null = null,
       vertices: Point[] = [],
       pathBase: Grid | null = null,
@@ -275,6 +287,7 @@ export function AsciiFlowApp({
           targetRow: p.row,
           targetCol: p.col,
           copyMode: true,
+          opaque: pasteOpaque,
           sourceSelection: { startRow: 0, startCol: 0, endRow: 0, endCol: 0 },
         });
       } else if (pathBase && vertices.length) {
@@ -307,10 +320,26 @@ export function AsciiFlowApp({
     const finishPaste = () => {
       if (!paste) return;
       const content = paste;
+      if (duplicateSource) {
+        const size = content.getSize(),
+          source = duplicateSource;
+        if (
+          hover.row <= source.endRow &&
+          hover.row + size.rows - 1 >= source.startRow &&
+          hover.col <= source.endCol &&
+          hover.col + size.cols - 1 >= source.startCol
+        ) {
+          setMessage(
+            "Move the duplicate outside the original selection, then click or press Enter.",
+          );
+          return;
+        }
+      }
+      duplicateSource = null;
       paste = null;
       renderer.setDragPreview(null);
       manager.edit((ctx) =>
-        selection.placeGrid(content, hover.row, hover.col, ctx),
+        selection.placeGrid(content, hover.row, hover.col, ctx, pasteOpaque),
       );
       setPending(false);
     };
@@ -321,6 +350,7 @@ export function AsciiFlowApp({
       pathBase = null;
       vertices = [];
       paste = null;
+      duplicateSource = null;
       renderer.setDragPreview(null);
       setPending(false);
       update();
@@ -336,6 +366,20 @@ export function AsciiFlowApp({
     };
     actions.current = {
       cancel,
+      resetTool: () => {
+        cancel();
+        textTool.deactivate();
+        selection.clearSelection();
+        live.current.tool = "select";
+        setTool("select");
+        manager.setActiveTool("select");
+        setConfirm(null);
+        setHelp(false);
+        setCatalog(false);
+        setPreview(false);
+        canvas.focus();
+        update();
+      },
       finish: () => {
         finishPath();
         finishPaste();
@@ -364,6 +408,7 @@ export function AsciiFlowApp({
         setTool("select");
         manager.setActiveTool("select");
         paste = gridFromText(content, 1, 1);
+        pasteOpaque = true;
         setPending(true);
         refreshHover(hover);
         canvas.focus();
@@ -382,6 +427,8 @@ export function AsciiFlowApp({
         setTool("select");
         manager.setActiveTool("select");
         paste = captured;
+        duplicateSource = source;
+        pasteOpaque = !source.cells;
         setPending(true);
         refreshHover({ row: source.startRow, col: source.endCol + 2 });
         setMessage(
@@ -499,28 +546,20 @@ export function AsciiFlowApp({
     const local = (event: Event) =>
       appRef.current?.contains(event.target as Node);
     const keydown = (event: KeyboardEvent) => {
-      if (!local(event) || isField(event) || composing || live.current.saving)
+      if (!local(event)) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        actions.current.resetTool();
         return;
+      }
+      if (isField(event) || composing || live.current.saving) return;
       const key = event.key.toLowerCase(),
         mod = event.ctrlKey || event.metaKey;
       if (mod && key === "s") {
         event.preventDefault();
         event.stopPropagation();
         void callbacks.current.save(event.shiftKey);
-        return;
-      }
-      if (event.key === "Escape") {
-        event.preventDefault();
-        event.stopPropagation();
-        if (paste || pathBase || gesture) cancel();
-        else if (textTool.isActive()) {
-          textTool.deactivate();
-          canvas.focus();
-          renderer.render();
-        } else if (selection.getSelection()) {
-          selection.clearSelection();
-          update();
-        } else callbacks.current.requestClose();
         return;
       }
       if (live.current.preview) return;
@@ -595,6 +634,31 @@ export function AsciiFlowApp({
         }
       }
       if (!mod && !event.altKey) {
+        const action: Record<string, () => void> = {
+          g: () => {
+            cancel();
+            setCatalog((value) => !value);
+          },
+          u: () => {
+            cancel();
+            manager.undo();
+            update();
+          },
+          r: () => {
+            cancel();
+            manager.redo();
+            update();
+          },
+          d: () => actions.current.duplicate(),
+          c: () => manager.edit((ctx) => selection.centerLabel(ctx)),
+          x: () => setConfirm("clear"),
+        };
+        if (action[key]) {
+          event.preventDefault();
+          event.stopPropagation();
+          action[key]();
+          return;
+        }
         const next = toolList.find((t) => t.key.toLowerCase() === key);
         if (next) {
           event.preventDefault();
@@ -683,6 +747,9 @@ export function AsciiFlowApp({
       textarea.removeEventListener("input", acceptText);
     };
   }, [grid]);
+  useEffect(() => {
+    managerRef.current?.getSelectTool().setSmart(smartSelect);
+  }, [smartSelect]);
   useEffect(() => {
     rendererRef.current?.setOptions({ showGrid });
     rendererRef.current?.render();
@@ -773,6 +840,26 @@ export function AsciiFlowApp({
             <kbd>{item.key}</kbd>
           </button>
         ))}
+        <button
+          title="Figure catalog (G)"
+          aria-expanded={catalog}
+          onClick={() => {
+            actions.current.cancel();
+            setCatalog(!catalog);
+          }}
+        >
+          Figures <kbd>G</kbd>
+        </button>
+        {tool === "select" && (
+          <label>
+            <input
+              type="checkbox"
+              checked={smartSelect}
+              onChange={(e) => setSmartSelect(e.target.checked)}
+            />
+            Smart selection
+          </label>
+        )}
         {tool === "freeform" && (
           <label>
             Character{" "}
@@ -823,9 +910,9 @@ export function AsciiFlowApp({
             managerRef.current?.undo();
             setRevision((v) => v + 1);
           }}
-          title="⌘/Ctrl+Z"
+          title="Undo (U or ⌘/Ctrl+Z)"
         >
-          Undo
+          Undo <kbd>U</kbd>
         </button>
         <button
           disabled={saving || preview || !managerRef.current?.canRedo}
@@ -834,38 +921,47 @@ export function AsciiFlowApp({
             managerRef.current?.redo();
             setRevision((v) => v + 1);
           }}
-          title="⌘/Ctrl+Shift+Z"
+          title="Redo (R or ⌘/Ctrl+Shift+Z)"
         >
-          Redo
+          Redo <kbd>R</kbd>
         </button>
         <button
           disabled={saving || preview}
           onClick={() => actions.current.selectAll()}
         >
-          Select all
+          Select all <kbd>⌘/Ctrl+A</kbd>
         </button>
         <button
           disabled={saving || preview || !selected}
           onClick={() => actions.current.duplicate()}
-          title="⌘/Ctrl+D"
+          title="Duplicate (D or ⌘/Ctrl+D)"
         >
-          Duplicate
+          Duplicate <kbd>D</kbd>
         </button>
         <button
-          disabled={saving || preview || selectedShape?.kind !== "box"}
+          disabled={
+            saving ||
+            preview ||
+            !selected ||
+            (selectedShape?.kind !== "box" &&
+              !enclosingBox(grid, {
+                row: Math.min(selected.startRow, selected.endRow),
+                col: Math.min(selected.startCol, selected.endCol),
+              }))
+          }
           onClick={() =>
             managerRef.current?.edit((ctx) =>
               managerRef.current!.getSelectTool().centerLabel(ctx),
             )
           }
         >
-          Center label
+          Center label <kbd>C</kbd>
         </button>
         <button
           disabled={saving || preview || !text}
           onClick={() => setConfirm("clear")}
         >
-          Clear
+          Clear <kbd>X</kbd>
         </button>
         <div className="asciiflow-spacer" />
         <button
@@ -906,9 +1002,11 @@ export function AsciiFlowApp({
           ⌘/Ctrl+D duplicates. Paste, position, then click or Enter. Red preview
           cells will be overwritten.
           <br />
-          ⌘/Ctrl+S saves; ⌘/Ctrl+Shift+S saves and closes. Escape first cancels
-          the current action. Plain text is available in Preview for keyboard
-          and screen-reader access.
+          ⌘/Ctrl+S saves; ⌘/Ctrl+Shift+S saves and closes. Escape resets to
+          Select without closing. U undoes, R redoes, Cmd/Ctrl+A selects all, D
+          duplicates, C centers labels, and X clears after confirmation. Action
+          letters work when not typing a label. Plain text is available in
+          Preview for keyboard and screen-reader access.
         </div>
       )}
       {error && (
@@ -916,6 +1014,21 @@ export function AsciiFlowApp({
           {error}
           <button onClick={() => setError("")}>Dismiss</button>
         </div>
+      )}
+      {catalog && (
+        <FigureCatalog
+          onClose={() => {
+            setCatalog(false);
+            canvasRef.current?.focus();
+          }}
+          onChoose={(figure) => {
+            setCatalog(false);
+            actions.current.paste(figure.art);
+            setMessage(
+              `Place ${figure.name}: click or Enter to confirm, Escape to cancel.`,
+            );
+          }}
+        />
       )}
       {confirm && (
         <div

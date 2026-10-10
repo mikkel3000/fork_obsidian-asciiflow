@@ -19,5 +19,11 @@
 
 ## Conventions
 - Tools mutate grid via `ToolContext` and call `render()` after changes.
-- Grid writes outside bounds are ignored; check grid size when debugging.
+- The grid grows to include nonnegative writes; negative coordinates are ignored.
 - Theme colors come from CSS variables (`--background-primary`, `--text-normal`, `--background-modifier-border`).
+
+## Commit messages
+- Always use the versionedcommits format in `VERSIONEDCOMMITS.md`.
+- User-facing features use `@minor`; fixes use `@patch`; breaking changes use `@major`.
+- Put hints on separate lines in the commit body and close detailed note blocks with the same hint.
+- Preserve release metadata when squashing. Conventional-commit prefixes alone are insufficient.

@@ -23,13 +23,13 @@ You can also write a block manually:
 
 | Action                                      | How                                                                                                                                   |
 | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| Select, Box, Line, Arrow, Text, Draw, Erase | Toolbar or V, B, L, A, T, F, E when not typing a label                                                                                |
+| Select, Box, Line, Arrow, Text, Draw, Erase | Toolbar or S, B, L, A, T, F, E when not typing a label                                                                                |
 | Place accurately                            | Hover highlights the target cell; Draw previews its character                                                                         |
 | Connect shapes                              | Lines merge into corners, tees and crossings automatically                                                                            |
-| Change a connector bend                     | Hold Shift while dragging                                                                                                             |
+| Change a connector bend                     | Drag following the desired path; corners follow deliberate turns. Hold Shift for a fixed vertical-first bend                          |
 | Multiple connector bends                    | Enable **Waypoints**, click successive points, hover the final endpoint and press Enter; Escape cancels                               |
 | Label a diagram                             | Double-click, or select Text and click; Enter keeps the starting column                                                               |
-| Center a label                              | Select a box including its border, then **Center label**                                                                              |
+| Center a label                              | Select a label inside a box or select the whole box, then **Center label** / C                                                        |
 | Move a selection                            | Drag inside it, or use arrow keys; Shift nudges ten cells                                                                             |
 | Duplicate                                   | Cmd/Ctrl-drag, or Cmd/Ctrl+D / **Duplicate** then position and click/Enter. Escape cancels; Alt+arrow keys copy while nudging         |
 | Paste                                       | Cmd/Ctrl+V, move the floating preview, then click or Enter; Escape cancels. Red cells indicate existing content that will be replaced |
@@ -104,3 +104,27 @@ The DOM tests mock canvas rendering and Obsidian is not present in that harness.
 - `src/renderer/`: canvas drawing, hover, selection and overwrite previews.
 
 MIT license. Based on [xvusrmqj/obsidian-asciiflow](https://github.com/xvusrmqj/obsidian-asciiflow).
+
+## Selection and action shortcuts
+
+Smart selection is enabled by default. Click a box border, label, connector, or connected freehand object to select it. Drag across a label and a partial border to select only the label. Turn **Smart selection** off for literal rectangular cell selection.
+
+**Escape** cancels the current gesture, clears the selection, and resets to Select. It never closes the editor or opens a save prompt. Use the explicit Close button to leave.
+
+| Action                                   | Shortcut                                       |
+| ---------------------------------------- | ---------------------------------------------- |
+| Select tool                              | S                                              |
+| Undo                                     | U or Cmd/Ctrl+Z                                |
+| Redo                                     | R or Cmd/Ctrl+Shift+Z; Ctrl+Y also works       |
+| Select all                               | Cmd/Ctrl+A                                     |
+| Duplicate                                | D or Cmd/Ctrl+D, then position and click/Enter |
+| Center label horizontally and vertically | C                                              |
+| Clear drawing                            | X, then confirm                                |
+
+Single-letter actions are inactive while entering a label. Duplicates cannot be placed over their source; move the preview clear of the original before committing. Rendered notes crop empty margins and center the visible drawing, without changing stored coordinates.
+
+## Figure catalog
+
+Use **Figures** / **G** to browse 24 built-in shapes, flowcharts, architecture symbols, connectors, and characters. Search matches names, categories, and tags. Click a figure to start a floating placement preview; click the canvas or press Enter to place, or Escape to cancel. The catalog works offline and stores placed figures as ordinary diagram text.
+
+Smart connector selection includes its box attachment cells and arrowheads, highlights the actual path, and restores the box boundary when moving or deleting the connector.

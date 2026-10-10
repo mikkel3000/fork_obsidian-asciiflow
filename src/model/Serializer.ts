@@ -53,3 +53,18 @@ export function gridToText(grid: Grid): string {
   }
   return lines.join("\n").replace(/\n+$/g, "");
 }
+
+/** Crop display-only whitespace; editing and saving retain the original coordinates. */
+export function drawingPreviewText(text: string): string {
+  const grid = gridFromText(text, 1, 1);
+  let top = Infinity,
+    left = Infinity;
+  grid.forEachCell((p) => {
+    top = Math.min(top, p.row);
+    left = Math.min(left, p.col);
+  });
+  if (!Number.isFinite(top)) return "";
+  const cropped = new Grid(1, 1);
+  grid.forEachCell((p) => cropped.setCell(p.row - top, p.col - left, p.value));
+  return gridToText(cropped);
+}
