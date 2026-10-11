@@ -27,6 +27,15 @@ export class CanvasRenderer {
   private cleanPreview = false;
   private frame: number | null = null;
   private disposed = false;
+  private pixelRatio = 1;
+  private width = 0;
+  private height = 0;
+  private resolutionQuery: MediaQueryList | null = null;
+  private readonly onResolutionChange = () => {
+    this.resize(this.width, this.height);
+    this.watchResolution();
+    this.render();
+  };
   private panX = 0;
   private panY = 0;
   private zoom = 1;
@@ -50,6 +59,22 @@ export class CanvasRenderer {
     this.theme = theme;
 
     this.applyFont();
+    this.watchResolution();
+  }
+
+  private get win() {
+    return this.canvas.ownerDocument.defaultView!;
+  }
+
+  private watchResolution() {
+    this.resolutionQuery?.removeEventListener(
+      "change",
+      this.onResolutionChange,
+    );
+    this.resolutionQuery = this.win.matchMedia(
+      `(resolution: ${this.win.devicePixelRatio}dppx)`,
+    );
+    this.resolutionQuery.addEventListener("change", this.onResolutionChange);
   }
 
   setGrid(grid: Grid) {
@@ -83,24 +108,21 @@ export class CanvasRenderer {
   }
 
   resize(width: number, height: number) {
-    this.canvas.width = Math.floor(width * window.devicePixelRatio);
-    this.canvas.height = Math.floor(height * window.devicePixelRatio);
-    this.canvas.style.width = `${width}px`;
-    this.canvas.style.height = `${height}px`;
-    this.ctx.setTransform(
-      window.devicePixelRatio,
-      0,
-      0,
-      window.devicePixelRatio,
-      0,
-      0,
-    );
+    this.width = width;
+    this.height = height;
+    this.pixelRatio = this.win.devicePixelRatio || 1;
+    this.canvas.width = Math.max(1, Math.floor(width * this.pixelRatio));
+    this.canvas.height = Math.max(1, Math.floor(height * this.pixelRatio));
+    // Keep an exact physical-pixel ratio instead of stretching a rounded bitmap.
+    this.canvas.style.width = `${this.canvas.width / this.pixelRatio}px`;
+    this.canvas.style.height = `${this.canvas.height / this.pixelRatio}px`;
+    this.ctx.setTransform(this.pixelRatio, 0, 0, this.pixelRatio, 0, 0);
     this.applyFont();
   }
 
   render() {
     if (this.disposed || this.frame !== null) return;
-    this.frame = window.requestAnimationFrame(() => {
+    this.frame = this.win.requestAnimationFrame(() => {
       this.frame = null;
       this.draw();
     });
@@ -108,15 +130,19 @@ export class CanvasRenderer {
 
   dispose() {
     this.disposed = true;
-    if (this.frame !== null) window.cancelAnimationFrame(this.frame);
+    if (this.frame !== null) this.win.cancelAnimationFrame(this.frame);
+    this.resolutionQuery?.removeEventListener(
+      "change",
+      this.onResolutionChange,
+    );
     this.frame = null;
   }
 
   private draw() {
     const { cellWidth, cellHeight, showGrid } = this.options;
     const ctx = this.ctx;
-    const canvasWidth = this.canvas.width / window.devicePixelRatio;
-    const canvasHeight = this.canvas.height / window.devicePixelRatio;
+    const canvasWidth = this.canvas.width / this.pixelRatio;
+    const canvasHeight = this.canvas.height / this.pixelRatio;
 
     ctx.save();
     ctx.clearRect(0, 0, canvasWidth, canvasHeight);
@@ -128,8 +154,13 @@ export class CanvasRenderer {
 
     if (showGrid && !this.cleanPreview) {
       ctx.strokeStyle = this.theme.grid || "#333";
-      ctx.lineWidth = 1;
+      ctx.lineWidth = 1 / (this.pixelRatio * this.zoom);
       ctx.beginPath();
+      const snap = (value: number, pan: number) =>
+        ((Math.floor((value * this.zoom + pan) * this.pixelRatio) + 0.5) /
+          this.pixelRatio -
+          pan) /
+        this.zoom;
 
       const startCol = Math.max(
         0,
@@ -147,13 +178,13 @@ export class CanvasRenderer {
       );
 
       for (let c = startCol; c <= cols; c += 1) {
-        const x = c * cellWidth;
+        const x = snap(c * cellWidth, this.panX);
         ctx.moveTo(x, startRow * cellHeight);
         ctx.lineTo(x, rows * cellHeight);
       }
 
       for (let r = startRow; r <= rows; r += 1) {
-        const y = r * cellHeight;
+        const y = snap(r * cellHeight, this.panY);
         ctx.moveTo(startCol * cellWidth, y);
         ctx.lineTo(cols * cellWidth, y);
       }

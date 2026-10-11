@@ -1015,7 +1015,15 @@ export function AsciiFlowApp({
         >
           −
         </button>
-        <span>{zoom}%</span>
+        <button
+          title="Reset zoom to 100%"
+          aria-label={`Zoom ${zoom}%. Reset to 100%`}
+          onClick={() =>
+            actions.current.zoom(1 / (rendererRef.current?.getZoom() ?? 1))
+          }
+        >
+          {zoom}%
+        </button>
         <button onClick={() => actions.current.zoom(1.2)} aria-label="Zoom in">
           +
         </button>
