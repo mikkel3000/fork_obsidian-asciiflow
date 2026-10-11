@@ -1,5 +1,5 @@
 export type ToolId =
-  "box" | "line" | "arrow" | "freeform" | "text" | "select" | "eraser";
+  "box" | "line" | "arrow" | "bus" | "freeform" | "text" | "select" | "eraser";
 
 export type ToolPointerState = {
   startRow: number;

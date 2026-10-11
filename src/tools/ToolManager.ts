@@ -3,6 +3,7 @@ import { ToolContext } from "./ToolContext";
 import { ITool } from "./ITool";
 import { ArrowTool } from "./ArrowTool";
 import { BoxTool } from "./BoxTool";
+import { BusTool, BusDirection } from "./BusTool";
 import { FreeformTool } from "./FreeformTool";
 import { HistoryManager } from "./HistoryManager";
 import { LineTool } from "./LineTool";
@@ -34,6 +35,7 @@ export class ToolManager {
 
     this.tools.set("box", new BoxTool());
     this.tools.set("line", new LineTool());
+    this.tools.set("bus", new BusTool());
     this.tools.set("arrow", new ArrowTool());
     this.tools.set("freeform", new FreeformTool());
     this.tools.set("eraser", new FreeformTool(true));
@@ -91,6 +93,10 @@ export class ToolManager {
 
   setBrushSize(size: number) {
     (this.tools.get("eraser") as FreeformTool).setSize(size);
+  }
+
+  setBusOptions(gap: number, direction: BusDirection) {
+    (this.tools.get("bus") as BusTool).configure(gap, direction);
   }
 
   edit(action: (ctx: ToolContext) => void, group = "") {

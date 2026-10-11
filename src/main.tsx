@@ -363,12 +363,17 @@ export default class AsciiFlowPlugin extends Plugin {
     el: HTMLElement,
     ctx: MarkdownPostProcessorContext,
   ) {
-    const container = el.createDiv({ cls: "asciiflow-preview" });
+    const container = el.createEl("figure", { cls: "asciiflow-preview" });
+    container.setAttribute("aria-label", "ASCIIFlow diagram");
     const bar = container.createDiv({ cls: "asciiflow-preview-actions" });
+    bar.setAttribute("role", "group");
+    bar.setAttribute("aria-label", "Diagram actions");
+    let editButton: HTMLButtonElement | undefined;
     for (const pane of [false, true]) {
       const button = bar.createEl("button", {
         text: pane ? "Open in pane" : "Edit drawing",
       });
+      if (!pane) editButton = button;
       button.addEventListener("click", async () => {
         button.disabled = true;
         try {
@@ -396,11 +401,27 @@ export default class AsciiFlowPlugin extends Plugin {
         }
       });
     }
-    container
-      .createEl("pre")
-      .setText(
-        drawingPreviewText(source) ||
-          "Empty diagram — click Edit drawing to start.",
-      );
+    const text = drawingPreviewText(source);
+    const viewport = container.createDiv({ cls: "asciiflow-diagram-viewport" });
+    viewport.tabIndex = 0;
+    viewport.setAttribute("role", "group");
+    viewport.setAttribute(
+      "aria-label",
+      "Diagram. Double-click or press Enter to edit.",
+    );
+    viewport.title = "Double-click to edit drawing";
+    viewport.addEventListener("dblclick", () => editButton?.click());
+    viewport.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        event.stopPropagation();
+        editButton?.click();
+      }
+    });
+    viewport.createDiv({ cls: "asciiflow-diagram-text", text });
+    if (!text) {
+      container.addClass("is-empty");
+      viewport.setText("Empty diagram — choose Edit drawing to start.");
+    }
   }
 }

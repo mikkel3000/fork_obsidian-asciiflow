@@ -23,6 +23,15 @@ export const strokes: Record<string, number> = {
   "┬": 14,
   "┴": 11,
   "┼": 15,
+  "═": 10,
+  "║": 5,
+  "╤": 14,
+  "╧": 11,
+  "╪": 15,
+  "╟": 7,
+  "╢": 13,
+  "╫": 15,
+  "╬": 15,
 };
 const glyphs: Record<number, string> = {
   1: "│",
@@ -92,6 +101,7 @@ export function drawPath(
   points: Point[],
   arrow = false,
   join = true,
+  doubleAxis?: "horizontal" | "vertical",
 ) {
   const masks = new Map<string, { point: Point; mask: number }>();
   points.forEach((p, i) => {
@@ -104,8 +114,40 @@ export function drawPath(
       (join ? (strokes[grid.getCell(p.row, p.col)] ?? 0) : 0);
     masks.set(key, { point: p, mask });
   });
-  for (const { point: p, mask } of masks.values())
-    grid.setCell(p.row, p.col, glyphs[mask] ?? "─");
+  for (const { point: p, mask } of masks.values()) {
+    const old = join ? grid.getCell(p.row, p.col) : "";
+    const horizontal =
+      doubleAxis === "horizontal" || ("═╤╧╪╬".includes(old) && old !== "");
+    const vertical =
+      doubleAxis === "vertical" || ("║╟╢╫╬".includes(old) && old !== "");
+    const h: Record<number, string> = {
+      2: "═",
+      8: "═",
+      10: "═",
+      14: "╤",
+      11: "╧",
+      15: "╪",
+    };
+    const v: Record<number, string> = {
+      1: "║",
+      4: "║",
+      5: "║",
+      7: "╟",
+      13: "╢",
+      15: "╫",
+    };
+    grid.setCell(
+      p.row,
+      p.col,
+      horizontal && vertical
+        ? "╬"
+        : horizontal
+          ? (h[mask] ?? glyphs[mask])
+          : vertical
+            ? (v[mask] ?? glyphs[mask])
+            : (glyphs[mask] ?? "─"),
+    );
+  }
   if (arrow && points.length > 1) {
     const tip = points[points.length - 1],
       previous = points[points.length - 2];

@@ -6,7 +6,8 @@ Draw and revise text diagrams inside Obsidian. Diagrams remain ordinary `asciifl
 
 Run **ASCIIFlow: Insert ASCII diagram** from the command palette. It inserts a block at the cursor and opens the editor. To edit an existing diagram:
 
-- In Reading view, click **Edit drawing** for a modal or **Open in pane** to keep the note visible alongside it.
+- In Reading view and rendered Live Preview blocks, drawings appear as centered embeds without a code-block background. Hover or focus the drawing to reveal **Edit drawing** and **Open in pane** (always visible on touch devices). Double-click the drawing, or focus it and press Enter, to edit.
+- Source mode and active Live Preview blocks still expose the underlying `asciiflow` code fence for text editing.
 - In the note editor, put the cursor inside a diagram and run **ASCIIFlow: Edit ASCII diagram at cursor**.
 
 You can also write a block manually:
@@ -128,3 +129,7 @@ Single-letter actions are inactive while entering a label. Duplicates cannot be 
 Use **Figures** / **G** to browse 24 built-in shapes, flowcharts, architecture symbols, connectors, and characters. Search matches names, categories, and tags. Click a figure to start a floating placement preview; click the canvas or press Enter to place, or Escape to cancel. The catalog works offline and stores placed figures as ordinary diagram text.
 
 Smart connector selection includes its box attachment cells and arrowheads, highlights the actual path, and restores the box boundary when moving or deleting the connector.
+
+## Buses
+
+Choose **Bus** (**I**) and drag a straight horizontal or vertical path. **Compact** draws `═` or `║`. **Wide** draws two double-line rails with a 1-, 3-, or 5-cell gap, leaving existing content between them intact. The drag anchors the top/left rail; the second rail sits below/to its right. **Auto** locks direction on the first movement; choose **Horizontal** or **Vertical** for an explicit lock. Use Text (**T**) to label the gap. Lines connect with mixed single/double junctions. Each drag is one undo step; Escape cancels it.

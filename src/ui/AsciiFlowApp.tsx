@@ -10,6 +10,7 @@ import {
 } from "../model/Drawing";
 import { CanvasRenderer } from "../renderer/CanvasRenderer";
 import { InputHandler } from "../input/InputHandler";
+import { BusDirection } from "../tools/BusTool";
 import { ToolManager } from "../tools/ToolManager";
 import { ToolId, ToolPointerState } from "../tools/ToolTypes";
 import { enclosingBox } from "../model/SmartSelection";
@@ -55,6 +56,12 @@ const toolList: { id: ToolId; label: string; key: string; hint: string }[] = [
     hint: "Drag an arrow · Shift switches the bend · Turn on Waypoints for multiple bends",
   },
   {
+    id: "bus",
+    label: "Bus",
+    key: "I",
+    hint: "Drag a straight bus · Compact double line or wide rails · Auto locks to your initial drag direction",
+  },
+  {
     id: "text",
     label: "Text",
     key: "T",
@@ -89,6 +96,8 @@ export function AsciiFlowApp({
   const [smartSelect, setSmartSelect] = useState(true);
   const [tool, setTool] = useState<ToolId>("box");
   const [char, setChar] = useState("*");
+  const [busGap, setBusGap] = useState(0);
+  const [busDirection, setBusDirection] = useState<BusDirection>("auto");
   const [brush, setBrush] = useState(1);
   const [waypoints, setWaypoints] = useState(false);
   const [zoom, setZoom] = useState(100);
@@ -748,6 +757,9 @@ export function AsciiFlowApp({
     };
   }, [grid]);
   useEffect(() => {
+    managerRef.current?.setBusOptions(busGap, busDirection);
+  }, [busGap, busDirection]);
+  useEffect(() => {
     managerRef.current?.getSelectTool().setSmart(smartSelect);
   }, [smartSelect]);
   useEffect(() => {
@@ -870,6 +882,39 @@ export function AsciiFlowApp({
               className="asciiflow-character"
             />
           </label>
+        )}
+        {tool === "bus" && (
+          <>
+            <label>
+              Bus style{" "}
+              <select
+                value={busGap}
+                onChange={(e) => {
+                  actions.current.cancel();
+                  setBusGap(Number(e.target.value));
+                }}
+              >
+                <option value={0}>Compact ═ / ║</option>
+                <option value={1}>Wide · 1-cell gap</option>
+                <option value={3}>Wide · 3-cell gap</option>
+                <option value={5}>Wide · 5-cell gap</option>
+              </select>
+            </label>
+            <label>
+              Direction{" "}
+              <select
+                value={busDirection}
+                onChange={(e) => {
+                  actions.current.cancel();
+                  setBusDirection(e.target.value as BusDirection);
+                }}
+              >
+                <option value="auto">Auto</option>
+                <option value="horizontal">Horizontal</option>
+                <option value="vertical">Vertical</option>
+              </select>
+            </label>
+          </>
         )}
         {tool === "eraser" && (
           <label>
