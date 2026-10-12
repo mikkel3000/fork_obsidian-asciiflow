@@ -14,6 +14,7 @@ import { createRoot, Root } from "react-dom/client";
 import { mergeCodeBlock, replaceCodeBlock } from "./model/CodeBlock";
 import { drawingPreviewText } from "./model/Serializer";
 import { AsciiFlowApp, EditorHandle } from "./ui/AsciiFlowApp";
+import { WideDiagram } from "./ui/WideDiagram";
 
 const VIEW_TYPE = "asciiflow-editor";
 type Draft = { text: string; path: string; source: string; start: number };
@@ -365,6 +366,7 @@ export default class AsciiFlowPlugin extends Plugin {
   ) {
     const container = el.createEl("figure", { cls: "asciiflow-preview" });
     container.setAttribute("aria-label", "ASCIIFlow diagram");
+    ctx.addChild(new WideDiagram(el, container));
     const bar = container.createDiv({ cls: "asciiflow-preview-actions" });
     bar.setAttribute("role", "group");
     bar.setAttribute("aria-label", "Diagram actions");

@@ -1,6 +1,10 @@
 .asciiflow-preview {
   position: relative;
   margin: 1em 0;
+  width: calc(100% + 2 * var(--asciiflow-gutter, 0px));
+  max-width: none;
+  margin-inline: calc(-1 * var(--asciiflow-gutter, 0px));
+  box-sizing: border-box;
   padding: 36px 0 12px;
   color: var(--text-normal);
   background: transparent;
@@ -63,6 +67,8 @@
   }
   .asciiflow-preview {
     padding-top: 0;
+    width: 100%;
+    margin-inline: 0;
   }
 }
 .asciiflow-modal {

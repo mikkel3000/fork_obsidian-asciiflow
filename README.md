@@ -6,7 +6,7 @@ Draw and revise text diagrams inside Obsidian. Diagrams remain ordinary `asciifl
 
 Run **ASCIIFlow: Insert ASCII diagram** from the command palette. It inserts a block at the cursor and opens the editor. To edit an existing diagram:
 
-- In Reading view and rendered Live Preview blocks, drawings appear as centered embeds without a code-block background. Hover or focus the drawing to reveal **Edit drawing** and **Open in pane** (always visible on touch devices). Double-click the drawing, or focus it and press Enter, to edit.
+- In Reading view and rendered Live Preview blocks, drawings appear as centered embeds without a code-block background. They expand beyond the readable text column into available pane space, while paragraphs keep their normal width. Oversized diagrams scroll horizontally; drawings inside callouts or embedded notes retain their container width. Hover or focus the drawing to reveal **Edit drawing** and **Open in pane** (always visible on touch devices). Double-click the drawing, or focus it and press Enter, to edit.
 - Source mode and active Live Preview blocks still expose the underlying `asciiflow` code fence for text editing.
 - In the note editor, put the cursor inside a diagram and run **ASCIIFlow: Edit ASCII diagram at cursor**.
 
